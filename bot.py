@@ -60,7 +60,6 @@ async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    # 🔒 só salva no tópico correto
     if update.effective_chat.id != CHAT_ID:
         return
 
@@ -114,12 +113,12 @@ async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     nome = dados[1]
-classe = dados[2]
-nivel = dados[3]
-atk = dados[4]
-defesa = dados[5]
-crit = dados[6]
-hp = dados[7]
+    classe = dados[2]
+    nivel = dados[3]
+    atk = dados[4]
+    defesa = dados[5]
+    crit = dados[6]
+    hp = dados[7]
 
     msg = (
         f"📜 {nome}\n"
