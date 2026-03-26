@@ -7,6 +7,9 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters
 TOKEN = os.getenv("TOKEN")
 LIDER_ID = -1003806440152
 
+if not TOKEN:
+    raise ValueError("TOKEN não encontrado")
+
 print("👑 BOT INICIANDO...")
 
 # =========================
@@ -63,7 +66,7 @@ data TEXT
 conn.commit()
 
 # =========================
-# FUNÇÃO NOME (CORRIGIDA)
+# NOME LIMPO
 # =========================
 def nome(txt):
     linha = txt.split("\n")[0]
@@ -78,7 +81,7 @@ def nome(txt):
     return linha.strip().upper()
 
 # =========================
-# DETECTAR MISSÃO (NOVO)
+# MISSÃO
 # =========================
 def detectar_missao(txt):
     try:
@@ -89,21 +92,22 @@ def detectar_missao(txt):
         if "diaria" not in texto and "diária" not in texto:
             return None
 
-        nome_missao = re.search(r"diária (.+)", texto)
-        if not nome_missao:
+        nome_match = re.search(r"diária (.+)", texto)
+        if not nome_match:
             return None
 
-        nome_missao = nome_missao.group(1).strip().title()
+        nome_missao = nome_match.group(1).strip().title()
 
-        progresso = re.search(r"(\d+)/(\d+)", texto)
-        if not progresso:
+        prog = re.search(r"(\d+)/(\d+)", texto)
+        if not prog:
             return None
 
-        total = int(progresso.group(2))
+        total = int(prog.group(2))
 
         return nome_missao, total
 
-    except:
+    except Exception as e:
+        print("Erro detectar missão:", e)
         return None
 
 # =========================
@@ -121,11 +125,12 @@ def extrair(txt):
             "crit": int(re.search(r"CRIT\s*(\d+)", txt).group(1)),
             "xp": int(re.search(r"XP:\s*(\d+)", txt).group(1))
         }
-    except:
+    except Exception as e:
+        print("Erro extrair:", e)
         return None
 
 # =========================
-# SALVAR PLAYER
+# SALVAR
 # =========================
 def salvar(d):
     cursor.execute("SELECT xp FROM players WHERE nome=?", (d["nome"],))
@@ -151,87 +156,104 @@ def salvar(d):
 # PRESENÇA
 # =========================
 def presenca(n):
-    cursor.execute("SELECT * FROM presenca WHERE nome=? AND data=date('now')", (n,))
-    if cursor.fetchone(): return False
+    cursor.execute("SELECT 1 FROM presenca WHERE nome=? AND data=date('now')", (n,))
+    if cursor.fetchone():
+        return False
+
     cursor.execute("INSERT INTO presenca VALUES (?,date('now'),'P')", (n,))
     conn.commit()
     return True
 
 # =========================
-# RANK GENÉRICO
-# =========================
-def gerar_rank(campo, classe=None):
-    if classe:
-        cursor.execute(f"SELECT nome,{campo} FROM players WHERE classe=? ORDER BY {campo} DESC LIMIT 10",(classe,))
-    else:
-        cursor.execute(f"SELECT nome,{campo} FROM players ORDER BY {campo} DESC LIMIT 10")
-    return cursor.fetchall()
-
-async def rank_cmd(update, _, campo, titulo, classe=None):
-    dados = gerar_rank(campo, classe)
-    txt = f"{titulo}\n\n"
-    for i,(n,v) in enumerate(dados,1):
-        txt += f"{i}. {n} — {v}\n"
-    await update.message.reply_text(txt or "Sem dados")
-
-# =========================
-# RELATÓRIO
-# =========================
-async def relatorio(update,_):
-    txt="📜 RELATÓRIO\n\n"
-
-    cursor.execute("SELECT nome,xp FROM players ORDER BY xp DESC LIMIT 5")
-    for i,(n,v) in enumerate(cursor.fetchall(),1):
-        txt+=f"{i}. {n} — {v} XP\n"
-
-    txt+="\n📦 Drops:\n"
-    cursor.execute("SELECT nome,item FROM loots WHERE data=date('now')")
-    for n,i in cursor.fetchall():
-        txt+=f"{n} → {i}\n"
-
-    await update.message.reply_text(txt)
-
-# =========================
 # LOOTS
 # =========================
-def salvar_loot(n,item):
-    rar="lendario" if "lend" in item.lower() else "comum"
-    cursor.execute("INSERT INTO loots VALUES (?,?,?,date('now'))",(n,item,rar))
+def salvar_loot(n, item):
+    rar = "lendario" if "lend" in item.lower() else "comum"
+    cursor.execute("INSERT INTO loots VALUES (?,?,?,date('now'))", (n, item, rar))
     conn.commit()
 
-async def dropslg(update,_):
+async def dropslg(update, _):
     cursor.execute("""
-    SELECT item,COUNT(*) FROM loots 
+    SELECT item, COUNT(*) FROM loots
     WHERE raridade='lendario'
     GROUP BY item ORDER BY COUNT(*) DESC
     """)
-    txt="💎 Lendários\n\n"
-    for i,(item,q) in enumerate(cursor.fetchall(),1):
-        txt+=f"{i}. {item} — {q}\n"
+
+    dados = cursor.fetchall()
+    txt = "💎 Lendários\n\n"
+
+    for i, (item, q) in enumerate(dados, 1):
+        txt += f"{i}. {item} — {q}\n"
+
     await update.message.reply_text(txt or "Sem lendários")
 
 # =========================
 # MISSÃO
 # =========================
-async def missao(update,_):
-    cursor.execute("SELECT nome,SUM(pontos) FROM missoes GROUP BY nome ORDER BY SUM(pontos) DESC")
-    txt="⚔️ Missão\n\n"
-    for i,(n,v) in enumerate(cursor.fetchall(),1):
-        txt+=f"{i}. {n} — {v}\n"
+async def missao(update, _):
+    cursor.execute("""
+    SELECT nome, SUM(pontos)
+    FROM missoes
+    GROUP BY nome
+    ORDER BY SUM(pontos) DESC
+    """)
+
+    dados = cursor.fetchall()
+    txt = "⚔️ Missão\n\n"
+
+    for i, (n, v) in enumerate(dados, 1):
+        txt += f"{i}. {n} — {v}\n"
+
+    await update.message.reply_text(txt or "Sem dados")
+
+# =========================
+# RELATÓRIO
+# =========================
+async def relatorio(update, _):
+    txt = "📜 RELATÓRIO\n\n"
+
+    cursor.execute("SELECT nome, xp FROM players ORDER BY xp DESC LIMIT 5")
+    for i, (n, v) in enumerate(cursor.fetchall(), 1):
+        txt += f"{i}. {n} — {v} XP\n"
+
+    txt += "\n📦 Drops:\n"
+    cursor.execute("SELECT nome, item FROM loots WHERE data=date('now')")
+    for n, i in cursor.fetchall():
+        txt += f"{n} → {i}\n"
+
+    await update.message.reply_text(txt)
+
+# =========================
+# RANK
+# =========================
+def gerar_rank(campo):
+    cursor.execute(f"SELECT nome,{campo} FROM players ORDER BY {campo} DESC LIMIT 10")
+    return cursor.fetchall()
+
+async def rank_cmd(update, _, campo, titulo):
+    dados = gerar_rank(campo)
+    txt = f"{titulo}\n\n"
+
+    for i, (n, v) in enumerate(dados, 1):
+        txt += f"{i}. {n} — {v}\n"
+
     await update.message.reply_text(txt or "Sem dados")
 
 # =========================
 # LEITOR
 # =========================
-async def ler(update,_):
-    if not update.message: return
-    txt=update.message.text or update.message.caption
-    if not txt: return
+async def ler(update, _):
+    if not update.message:
+        return
 
-    # MISSÃO INTELIGENTE
-    dados_missao = detectar_missao(txt)
-    if dados_missao:
-        nome_missao, meta = dados_missao
+    txt = update.message.text or update.message.caption
+    if not txt:
+        return
+
+    # MISSÃO
+    dados = detectar_missao(txt)
+    if dados:
+        nome_missao, meta = dados
 
         cursor.execute("DELETE FROM missoes")
         cursor.execute("DELETE FROM missao_info")
@@ -247,42 +269,41 @@ async def ler(update,_):
         )
         return
 
+    # PERFIL
     if "XP:" in txt:
-        d=extrair(txt)
+        d = extrair(txt)
         if d:
             salvar(d)
             if presenca(d["nome"]):
                 await update.message.reply_text(f"📜 {d['nome']} registrado")
 
+    # CONTRIBUIÇÃO
     if "SEU TURNO" in txt:
-        n=nome(txt)
-        cursor.execute("INSERT INTO missoes VALUES (?,1)",(n,))
+        n = nome(txt)
+        cursor.execute("INSERT INTO missoes VALUES (?,1)", (n,))
         conn.commit()
         await update.message.reply_text("Registrada")
 
+    # FINAL
     if "Nenhuma tarefa ativa" in txt:
         cursor.execute("""
-        SELECT nome,SUM(pontos)
+        SELECT nome, SUM(pontos)
         FROM missoes
         GROUP BY nome
         ORDER BY SUM(pontos) DESC
         """)
         ranking = cursor.fetchall()
 
-        cursor.execute("SELECT nome FROM missao_info")
-        info = cursor.fetchone()
-        nome_missao = info[0] if info else "Missão"
+        txt = "🏁 Missão encerrada!\n\n🏆 Ranking:\n"
+        for i, (n, v) in enumerate(ranking, 1):
+            txt += f"{i}. {n} — {v}\n"
 
-        texto = f"🏁 Missão encerrada!\n\n📜 {nome_missao}\n\n🏆 Ranking:\n"
+        await update.message.reply_text(txt)
 
-        for i,(n,v) in enumerate(ranking,1):
-            texto += f"{i}. {n} — {v}\n"
-
-        await update.message.reply_text(texto)
-
+    # LOOT
     if "drop" in txt.lower():
-        n=nome(txt)
-        salvar_loot(n,txt)
+        n = nome(txt)
+        salvar_loot(n, txt)
         await update.message.reply_text("Drop registrado")
 
 # =========================
@@ -295,16 +316,17 @@ def main():
     app.add_handler(CommandHandler("dropslg", dropslg))
     app.add_handler(CommandHandler("missao", missao))
 
-    app.add_handler(CommandHandler("ranklevel", lambda u,c: rank_cmd(u,c,"nivel","🏆 Level")))
-    app.add_handler(CommandHandler("rankatk", lambda u,c: rank_cmd(u,c,"atk","⚔️ ATK")))
-    app.add_handler(CommandHandler("rankdef", lambda u,c: rank_cmd(u,c,"def","🛡 DEF")))
-    app.add_handler(CommandHandler("rankhp", lambda u,c: rank_cmd(u,c,"hp","❤️ HP")))
-    app.add_handler(CommandHandler("rankcc", lambda u,c: rank_cmd(u,c,"crit","🎯 CRIT")))
+    app.add_handler(CommandHandler("ranklevel", lambda u, c: rank_cmd(u, c, "nivel", "🏆 Level")))
+    app.add_handler(CommandHandler("rankatk", lambda u, c: rank_cmd(u, c, "atk", "⚔️ ATK")))
+    app.add_handler(CommandHandler("rankdef", lambda u, c: rank_cmd(u, c, "def", "🛡 DEF")))
+    app.add_handler(CommandHandler("rankhp", lambda u, c: rank_cmd(u, c, "hp", "❤️ HP")))
+    app.add_handler(CommandHandler("rankcc", lambda u, c: rank_cmd(u, c, "crit", "🎯 CRIT")))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ler))
 
     print("👑 BOT ONLINE")
-    app.run_polling(close_loop=False)
+
+    app.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == "__main__":
     main()
