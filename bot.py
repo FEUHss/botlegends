@@ -63,7 +63,10 @@ async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != CHAT_ID:
         return
 
-    if update.message.message_thread_id != TOPICO_PRESENCA:
+    # 🔥 CORREÇÃO AQUI (forma robusta de pegar o tópico)
+    thread_id = getattr(update.message, "message_thread_id", None)
+
+    if thread_id is None or int(thread_id) != int(TOPICO_PRESENCA):
         return
 
     texto = update.message.text
@@ -146,3 +149,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
