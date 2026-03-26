@@ -8,7 +8,7 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise Exception("TOKEN não encontrado")
 
-# 🔥 ID DO TÓPICO DE PRESENÇA
+# 🔥 TÓPICO DE PRESENÇA
 TOPICO_PRESENCA_ID = 16325
 
 # =========================
@@ -24,27 +24,22 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         texto = update.message.text
-
         if not texto:
             return
 
-        # 🔥 SÓ PROCESSA SE FOR PERFIL
+        # 🔥 APENAS PERFIL
         if "XP:" not in texto:
             return
 
-        # =========================
-        # EXTRAÇÃO DOS DADOS
-        # =========================
+        # EXTRAÇÃO
         xp = int(re.search(r"XP:\s*(\d+)", texto).group(1))
         atk = int(re.search(r"ATK\s*(\d+)", texto).group(1))
         defesa = int(re.search(r"DEF\s*(\d+)", texto).group(1))
         crit = int(re.search(r"CRIT\s*(\d+)", texto).group(1))
         hp = int(re.search(r"HP:\s*\d+/(\d+)", texto).group(1))
 
-        # LOG (Railway)
         print(f"XP: {xp} | ATK: {atk} | DEF: {defesa} | CRIT: {crit} | HP: {hp}")
 
-        # RESPOSTA
         await update.message.reply_text("📜 O Pilar grava a sua jornada.")
 
     except Exception as e:
@@ -58,12 +53,15 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
 
-    print("🚀 BOT INICIADO")
+    print("🚀 BOT INICIANDO...")
 
     app.run_polling(
         drop_pending_updates=True,
-        close_loop=False
+        close_loop=False,
+        allowed_updates=["message"]
     )
+
+    print("🚀 BOT INICIADO")
 
 # =========================
 # START
