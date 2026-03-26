@@ -37,10 +37,7 @@ def main():
 
     print("🚀 BOT INICIADO")
 
-    try:
-        app.bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        print("Erro ao limpar webhook:", e)
+    # ❌ REMOVIDO delete_webhook (era a causa do crash)
 
     app.run_polling(
         drop_pending_updates=True,
