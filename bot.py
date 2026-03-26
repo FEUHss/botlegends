@@ -7,6 +7,9 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters
 
 TOKEN = os.getenv("TOKEN")
 
+if not TOKEN:
+    raise ValueError("TOKEN não encontrado")
+
 print("👑 BOT INICIANDO...")
 
 LIDER_ID = -1003806440152
@@ -101,7 +104,7 @@ def registrar_presenca(n):
     return True
 
 # =========================
-# RANKS
+# RANKINGS
 # =========================
 async def rank(update,_):
     cursor.execute("SELECT nome,xp FROM players ORDER BY xp DESC LIMIT 10")
@@ -161,4 +164,99 @@ async def dropslg(update,_):
         txt+=f"{n} → {i}\n"
     await update.message.reply_text(txt or "Sem drops")
 
-# =================
+# =========================
+# RELATÓRIO
+# =========================
+async def relatorio(context):
+    cursor.execute("SELECT COUNT(*) FROM players")
+    total=cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(DISTINCT nome) FROM presenca WHERE data=date('now')")
+    pres=cursor.fetchone()[0]
+
+    txt=f"📊 Relatório\nPresença: {pres}/{total}"
+    await context.bot.send_message(chat_id=LIDER_ID,text=txt)
+
+# =========================
+# INATIVIDADE
+# =========================
+async def inatividade(context):
+    cursor.execute("SELECT nome FROM players WHERE last_seen < datetime('now','-3 day')")
+    for n in cursor.fetchall():
+        await context.bot.send_message(chat_id=LIDER_ID,text=f"⚠️ {n[0]} inativo 3 dias")
+
+# =========================
+# LEITOR
+# =========================
+async def ler(update,_):
+    global missao_ativa
+
+    if not update.message: return
+    txt=update.message.text or update.message.caption
+    if not txt: return
+
+    if "XP:" in txt:
+        d=extrair(txt)
+        if d:
+            salvar(d)
+            if registrar_presenca(d["nome"]):
+                await update.message.reply_text(f"📜 {d['nome']} registrado")
+
+    if "Tarefas da Guilda" in txt:
+        cursor.execute("DELETE FROM missoes")
+        conn.commit()
+        await update.message.reply_text("⚔️ Nova missão iniciada!")
+
+    if "SEU TURNO" in txt:
+        n=nome(txt)
+        cursor.execute("INSERT INTO missoes VALUES (?,1)",(n,))
+        conn.commit()
+        await update.message.reply_text("Registrada.")
+
+    if "Nenhuma tarefa ativa" in txt:
+        cursor.execute("SELECT nome,SUM(pontos) FROM missoes GROUP BY nome ORDER BY SUM(pontos) DESC")
+        d=cursor.fetchall()
+        txt="🏆 Resultado da Missão\n\n"
+        for i,(n,v) in enumerate(d,1):
+            txt+=f"{i}. {n} — {v}\n"
+        await update.message.reply_text("🏁 Missão encerrada!\n"+txt)
+
+    if "drop" in txt.lower():
+        n=nome(txt)
+        salvar_loot(n,txt)
+        await update.message.reply_text("Drop registrado")
+
+# =========================
+# MAIN COM DEBUG
+# =========================
+def main():
+    try:
+        print("🚀 Criando aplicação...")
+        app = Application.builder().token(TOKEN).build()
+
+        print("✅ Adicionando comandos...")
+        app.add_handler(CommandHandler("rank", rank))
+        app.add_handler(CommandHandler("rankclasse", rankclasse))
+        app.add_handler(CommandHandler("xpdia", xpdia))
+        app.add_handler(CommandHandler("missao", missao))
+        app.add_handler(CommandHandler("dropslg", dropslg))
+
+        print("✅ Adicionando leitor...")
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ler))
+
+        if app.job_queue:
+            print("✅ Ativando jobs...")
+            app.job_queue.run_daily(relatorio, time=time(23,0))
+            app.job_queue.run_daily(inatividade, time=time(12,0))
+        else:
+            print("⚠️ JobQueue não disponível")
+
+        print("👑 BOT ONLINE")
+
+        app.run_polling(close_loop=False)
+
+    except Exception as e:
+        print("💥 ERRO:", e)
+
+if __name__ == "__main__":
+    main()
