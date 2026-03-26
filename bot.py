@@ -3,12 +3,15 @@ import re
 import sqlite3
 import unicodedata
 from telegram import Update
-from telegram.ext import Application, MessageHandler, ContextTypes, filters
+from telegram.ext import Application, MessageHandler, CommandHandler, ContextTypes, filters
 
 TOKEN = os.getenv("TOKEN")
 
 if not TOKEN:
     raise Exception("TOKEN não encontrado")
+
+# 🔥 ID DO TÓPICO PRESENÇA
+TOPICO_PRESENCA_ID = 16325
 
 # =========================
 # BANCO
@@ -19,11 +22,14 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS players (
 nome TEXT PRIMARY KEY,
+nivel INTEGER,
 xp INTEGER,
 atk INTEGER,
 def REAL,
 crit INTEGER,
-hp INTEGER
+hp INTEGER,
+gold INTEGER,
+tofu INTEGER
 )
 """)
 
@@ -46,23 +52,24 @@ def limpar_nome(texto):
     linha = unicodedata.normalize("NFD", linha)
     linha = linha.encode("ascii","ignore").decode()
 
-    linha = re.sub(r"\[.*?\]", "", linha)  # remove [LG]
-    linha = re.sub(r"\d+", "", linha)      # remove números
-    linha = re.sub(r"[^\w\s]", "", linha)  # remove símbolos
+    linha = re.sub(r".*?", "", linha)
+    linha = re.sub(r"\d+", "", linha)
+    linha = re.sub(r"[^\w\s]", "", linha)
 
     return linha.strip().upper()
 
 # =========================
 # SALVAR PLAYER
 # =========================
-def salvar_player(nome, xp, atk, defesa, crit, hp):
+def salvar_player(d):
     cursor.execute("""
-    INSERT INTO players VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO players VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(nome) DO UPDATE SET
-    xp=?, atk=?, def=?, crit=?, hp=?
-    """, (nome, xp, atk, defesa, crit, hp,
-          xp, atk, defesa, crit, hp))
-
+    nivel=?, xp=?, atk=?, def=?, crit=?, hp=?, gold=?, tofu=?
+    """, (
+        d["nome"], d["nivel"], d["xp"], d["atk"], d["def"], d["crit"], d["hp"], d["gold"], d["tofu"],
+        d["nivel"], d["xp"], d["atk"], d["def"], d["crit"], d["hp"], d["gold"], d["tofu"]
+    ))
     conn.commit()
 
 # =========================
@@ -75,11 +82,34 @@ def registrar_presenca(nome):
     conn.commit()
 
 # =========================
-# HANDLER
+# EXTRAIR PERFIL
+# =========================
+def extrair(texto):
+    try:
+        return {
+            "nome": limpar_nome(texto),
+            "nivel": int(re.search(r"Lv\s*(\d+)", texto).group(1)),
+            "xp": int(re.search(r"XP:\s*(\d+)", texto).group(1)),
+            "atk": int(re.search(r"ATK\s*(\d+)", texto).group(1)),
+            "def": float(re.search(r"DEF\s*([\d\.]+)", texto).group(1)),
+            "crit": int(re.search(r"CRIT\s*(\d+)", texto).group(1)),
+            "hp": int(re.search(r"HP:\s*\d+/(\d+)", texto).group(1)),
+            "gold": int(re.search(r"Gold:\s*(\d+)", texto).group(1)),
+            "tofu": int(re.search(r"Tofus:\s*(\d+)", texto).group(1))
+        }
+    except:
+        return None
+
+# =========================
+# HANDLER (AGORA COM FILTRO)
 # =========================
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not update.message:
+            return
+
+        # 🔥 FILTRO DE TÓPICO
+        if update.message.message_thread_id != TOPICO_PRESENCA_ID:
             return
 
         texto = update.message.text or update.message.caption
@@ -87,51 +117,37 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not texto or "XP:" not in texto:
             return
 
-        # =========================
-        # EXTRAÇÃO
-        # =========================
-        nome = limpar_nome(texto)
+        dados = extrair(texto)
 
-        xp = int(re.search(r"XP:\s*(\d+)", texto).group(1))
-        atk = int(re.search(r"ATK\s*(\d+)", texto).group(1))
-        defesa = float(re.search(r"DEF\s*([\d\.]+)", texto).group(1))
-        crit = int(re.search(r"CRIT\s*(\d+)", texto).group(1))
-        hp = int(re.search(r"HP:\s*\d+/(\d+)", texto).group(1))
+        if not dados:
+            return
 
-        # =========================
-        # SALVAR
-        # =========================
-        salvar_player(nome, xp, atk, defesa, crit, hp)
-        registrar_presenca(nome)
+        salvar_player(dados)
+        registrar_presenca(dados["nome"])
 
-        print(f"{nome} salvo + presença")
+        print(f"{dados['nome']} salvo")
 
         await update.message.reply_text(
-            f"📜 O Pilar grava a sua jornada, {nome}."
+            f"📜 O Pilar grava a sua jornada, {dados['nome']}."
         )
 
     except Exception as e:
         print("ERRO:", e)
 
 # =========================
-# MAIN
+# /ver
 # =========================
-def main():
-    app = Application.builder().token(TOKEN).build()
+async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("SELECT * FROM players")
+    dados = cursor.fetchall()
 
-    app.add_handler(MessageHandler(filters.ALL, responder))
+    if not dados:
+        await update.message.reply_text("❌ Nenhum jogador salvo.")
+        return
 
-    print("🚀 BOT INICIANDO...")
+    txt = "📊 Jogadores registrados:\n\n"
 
-    app.run_polling(
-        drop_pending_updates=True,
-        close_loop=False,
-        allowed_updates=["message"],
-        poll_interval=2
-    )
-
-# =========================
-# START
-# =========================
-if __name__ == "__main__":
-    main()
+    for j in dados:
+        txt += (
+            f"👤 {j[0]}\n"
+            f"📈 Lv {j[1]} | XP {
