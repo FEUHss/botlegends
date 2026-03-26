@@ -1,8 +1,9 @@
+import os
 import re
-TOKEN = os.getenv("TOKEN")import psycopg2
+import psycopg2
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters, CommandHandler
-import os
 
 # ================= CONFIG =================
 
@@ -13,19 +14,25 @@ TOPIC_ID = 16325  # presença diária
 
 # ================= BANCO =================
 
-conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise Exception("DATABASE_URL não encontrada")
+
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
 # ================= EXTRAÇÃO =================
 
 def extrair_dados(texto):
     try:
-        # Nome (remove emojis e nível do começo)
         nome_linha = texto.split("\n")[0]
         nome = re.sub(r"[^\w\s,\[\]]", "", nome_linha)
         nome = re.sub(r"\d+", "", nome).strip()
 
-        # Classe + nível
         classe_match = re.search(r"Classe:\s*(\w+)\s*Lv\s*(\d+)", texto)
         if classe_match:
             classe = classe_match.group(1)
@@ -34,19 +41,15 @@ def extrair_dados(texto):
             classe = None
             nivel = None
 
-        # ATK
         atk_match = re.search(r"ATK\s*(\d+)", texto)
         atk = int(atk_match.group(1)) if atk_match else None
 
-        # DEF
         def_match = re.search(r"DEF\s*([\d\.]+)", texto)
         defesa = float(def_match.group(1)) if def_match else None
 
-        # CRIT
         crit_match = re.search(r"CRIT\s*(\d+)%", texto)
         crit = int(crit_match.group(1)) if crit_match else None
 
-        # HP
         hp_match = re.search(r"HP:\s*(\d+)/", texto)
         hp = int(hp_match.group(1)) if hp_match else None
 
@@ -130,4 +133,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
