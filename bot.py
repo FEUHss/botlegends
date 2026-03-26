@@ -7,9 +7,6 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters
 
 TOKEN = os.getenv("TOKEN")
 
-if not TOKEN:
-    raise ValueError("TOKEN não encontrado")
-
 print("👑 BOT INICIANDO...")
 
 LIDER_ID = -1003806440152
@@ -24,7 +21,9 @@ cursor.executescript("""
 CREATE TABLE IF NOT EXISTS players (
 nome TEXT PRIMARY KEY,
 xp INTEGER,
-last_xp INTEGER
+last_xp INTEGER,
+classe TEXT,
+last_seen TEXT
 );
 
 CREATE TABLE IF NOT EXISTS presenca (
@@ -41,6 +40,7 @@ pontos INTEGER
 CREATE TABLE IF NOT EXISTS loots (
 nome TEXT,
 item TEXT,
+raridade TEXT,
 data TEXT
 );
 
@@ -52,6 +52,8 @@ data TEXT
 """)
 
 conn.commit()
+
+missao_ativa = False
 
 # =========================
 # UTIL
@@ -66,24 +68,32 @@ def nome(txt):
 # =========================
 def extrair(txt):
     try:
-        return nome(txt), int(re.search(r"XP:\s*(\d+)", txt).group(1))
+        return {
+            "nome": nome(txt),
+            "xp": int(re.search(r"XP:\s*(\d+)", txt).group(1)),
+            "classe": re.search(r"Classe:\s*(\w+)", txt).group(1).lower()
+        }
     except:
         return None
 
-def salvar(n, xp):
-    cursor.execute("SELECT xp FROM players WHERE nome=?", (n,))
+def salvar(d):
+    cursor.execute("SELECT xp FROM players WHERE nome=?", (d["nome"],))
     r = cursor.fetchone()
-    last = r[0] if r else xp
+    last = r[0] if r else d["xp"]
 
     cursor.execute("""
-    INSERT INTO players VALUES (?,?,?)
-    ON CONFLICT(nome) DO UPDATE SET xp=?, last_xp=?
-    """, (n, xp, last, xp, last))
+    INSERT INTO players VALUES (?,?,?,?,datetime('now'))
+    ON CONFLICT(nome) DO UPDATE SET
+    xp=?, last_xp=?, classe=?, last_seen=datetime('now')
+    """, (d["nome"], d["xp"], last, d["classe"],
+          d["xp"], last, d["classe"]))
 
-    cursor.execute("INSERT INTO historico VALUES (?, ?, datetime('now'))", (n, xp))
+    cursor.execute("INSERT INTO historico VALUES (?, ?, datetime('now'))",
+                   (d["nome"], d["xp"]))
+
     conn.commit()
 
-def presenca(n):
+def registrar_presenca(n):
     cursor.execute("SELECT * FROM presenca WHERE nome=? AND data=date('now')", (n,))
     if cursor.fetchone(): return False
     cursor.execute("INSERT INTO presenca VALUES (?,date('now'),'P')", (n,))
@@ -91,20 +101,25 @@ def presenca(n):
     return True
 
 # =========================
-# RANK XP
+# RANKS
 # =========================
-async def rank(update, _):
+async def rank(update,_):
     cursor.execute("SELECT nome,xp FROM players ORDER BY xp DESC LIMIT 10")
-    d = cursor.fetchall()
-    txt = "🏆 Ranking XP\n\n"
+    d=cursor.fetchall()
+    txt="🏆 Ranking XP\n\n"
     for i,(n,v) in enumerate(d,1):
-        txt += f"{i}. {n} — {v}\n"
+        txt+=f"{i}. {n} — {v}\n"
     await update.message.reply_text(txt or "Sem dados")
 
-# =========================
-# EVOLUÇÃO XP
-# =========================
-async def xpdia(update, _):
+async def rankclasse(update,_):
+    cursor.execute("SELECT classe,nome,xp FROM players ORDER BY classe,xp DESC")
+    d=cursor.fetchall()
+    txt="🏹 Ranking por Classe\n\n"
+    for c,n,v in d:
+        txt+=f"{c.upper()} → {n} ({v})\n"
+    await update.message.reply_text(txt)
+
+async def xpdia(update,_):
     res=[]
     cursor.execute("SELECT DISTINCT nome FROM historico")
     for n in [x[0] for x in cursor.fetchall()]:
@@ -117,7 +132,7 @@ async def xpdia(update, _):
     txt="📊 XP Diário\n\n"
     for i,(n,v) in enumerate(res[:10],1):
         txt+=f"{i}. {n} +{v}\n"
-    await update.message.reply_text(txt or "Sem dados")
+    await update.message.reply_text(txt)
 
 # =========================
 # MISSÕES
@@ -134,7 +149,8 @@ async def missao(update,_):
 # LOOTS
 # =========================
 def salvar_loot(n,item):
-    cursor.execute("INSERT INTO loots VALUES (?,?,date('now'))",(n,item))
+    raridade="lendario" if "lend" in item.lower() else "comum"
+    cursor.execute("INSERT INTO loots VALUES (?,?,?,date('now'))",(n,item,raridade))
     conn.commit()
 
 async def dropslg(update,_):
@@ -145,65 +161,4 @@ async def dropslg(update,_):
         txt+=f"{n} → {i}\n"
     await update.message.reply_text(txt or "Sem drops")
 
-# =========================
-# RELATÓRIO AUTO
-# =========================
-async def relatorio(context):
-    cursor.execute("SELECT COUNT(*) FROM players")
-    total=cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(DISTINCT nome) FROM presenca WHERE data=date('now')")
-    pres=cursor.fetchone()[0]
-
-    txt=f"📊 Relatório\nPresença: {pres}/{total}"
-
-    await context.bot.send_message(chat_id=LIDER_ID,text=txt)
-
-# =========================
-# LEITOR
-# =========================
-async def ler(update,_):
-    if not update.message: return
-    txt=update.message.text or update.message.caption
-    if not txt: return
-
-    if "XP:" in txt:
-        d=extrair(txt)
-        if d:
-            n,xp=d
-            salvar(n,xp)
-            if presenca(n):
-                await update.message.reply_text(f"📜 {n} registrado")
-
-    if "SEU TURNO" in txt:
-        n=nome(txt)
-        cursor.execute("INSERT INTO missoes VALUES (?,1)",(n,))
-        conn.commit()
-        await update.message.reply_text("Registrado")
-
-    if "drop" in txt.lower():
-        n=nome(txt)
-        salvar_loot(n,txt)
-        await update.message.reply_text("Drop registrado")
-
-# =========================
-# MAIN
-# =========================
-def main():
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("rank",rank))
-    app.add_handler(CommandHandler("xpdia",xpdia))
-    app.add_handler(CommandHandler("missao",missao))
-    app.add_handler(CommandHandler("dropslg",dropslg))
-    app.add_handler(MessageHandler(filters.ALL,ler))
-
-    if app.job_queue:
-        app.job_queue.run_daily(relatorio,time=time(23,0))
-
-    print("👑 BOT ONLINE")
-
-    app.run_polling(close_loop=False)
-
-if __name__=="__main__":
-    main()
+# =================
