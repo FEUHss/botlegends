@@ -17,26 +17,27 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.text:
         return
 
+    print("Mensagem recebida:", update.message.text)
+
     await update.message.reply_text("🔥 BOT ONLINE")
 
 # =========================
-# MAIN (FORMA CORRETA)
+# MAIN
 # =========================
-async def main():
+def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
 
     print("🚀 BOT INICIADO")
 
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await app.stop()
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False
+    )
 
 # =========================
 # START
 # =========================
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
