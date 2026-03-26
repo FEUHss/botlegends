@@ -1,12 +1,12 @@
 import re
-import psycopg2
+TOKEN = os.getenv("TOKEN")import psycopg2
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters, CommandHandler
 import os
 
 # ================= CONFIG =================
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TOKEN")
 
 GROUP_ID = -1003792787717
 TOPIC_ID = 16325  # presença diária
