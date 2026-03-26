@@ -2,12 +2,11 @@ import re
 import sqlite3
 import unicodedata
 import os
-from telegram.ext import Application, MessageHandler, CommandHandler, filters
+from telegram.ext import Application, MessageHandler, filters
 
 TOKEN = os.getenv("TOKEN")
 
-if not TOKEN:
-    raise ValueError("TOKEN não encontrado")
+TOPICO_PRESENCA_ID = 16325
 
 print("👑 BOT INICIANDO...")
 
@@ -21,6 +20,14 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS players (
 nome TEXT PRIMARY KEY,
 xp INTEGER
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS presenca (
+nome TEXT,
+data TEXT,
+status TEXT
 )
 """)
 
@@ -38,6 +45,7 @@ def nome(txt):
     linha = re.sub(r"\[.*?\]", "", linha)
     linha = re.sub(r"\d+", "", linha)
     linha = re.sub(r"[^a-zA-Z\s]", "", linha)
+    linha = re.sub(r"\s+", " ", linha)
 
     return linha.strip().upper()
 
@@ -61,28 +69,36 @@ def salvar(n, xp):
     VALUES (?,?)
     ON CONFLICT(nome) DO UPDATE SET xp=excluded.xp
     """, (n, xp))
+    conn.commit()
+
+# =========================
+# PRESENÇA
+# =========================
+def registrar_presenca(n):
+    cursor.execute("""
+    SELECT 1 FROM presenca 
+    WHERE nome=? AND data=date('now')
+    """, (n,))
+
+    if cursor.fetchone():
+        return
+
+    cursor.execute("""
+    INSERT INTO presenca VALUES (?,date('now'),'P')
+    """, (n,))
 
     conn.commit()
 
 # =========================
-# COMANDOS
-# =========================
-async def rank(update, context):
-    cursor.execute("SELECT nome,xp FROM players ORDER BY xp DESC LIMIT 10")
-
-    txt = "🏆 Ranking XP\n\n"
-
-    for i,(n,v) in enumerate(cursor.fetchall(),1):
-        txt += f"{i}. {n} — {v}\n"
-
-    await update.message.reply_text(txt or "Sem dados")
-
-# =========================
-# LEITOR
+# LEITOR (FILTRADO)
 # =========================
 async def ler(update, context):
     try:
         if not update.message:
+            return
+
+        # 🔥 FILTRO DO TÓPICO
+        if update.message.message_thread_id != TOPICO_PRESENCA_ID:
             return
 
         txt = update.message.text or update.message.caption
@@ -94,9 +110,11 @@ async def ler(update, context):
 
             if dados:
                 n, xp = dados
-                salvar(n, xp)
 
-                await update.message.reply_text(f"📜 {n} salvo")
+                salvar(n, xp)
+                registrar_presenca(n)
+
+                print(f"✔ {n} salvo (presença registrada)")
 
     except Exception as e:
         print("ERRO:", e)
@@ -107,8 +125,7 @@ async def ler(update, context):
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("rank", rank))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ler))
+    app.add_handler(MessageHandler(filters.TEXT, ler))
 
     print("👑 BOT ONLINE")
 
