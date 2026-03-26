@@ -52,11 +52,30 @@ def limpar_nome(texto):
     linha = unicodedata.normalize("NFD", linha)
     linha = linha.encode("ascii","ignore").decode()
 
-    linha = re.sub(r".*?", "", linha)
+    linha = re.sub(r"\[.*?\]", "", linha)
     linha = re.sub(r"\d+", "", linha)
     linha = re.sub(r"[^\w\s]", "", linha)
 
     return linha.strip().upper()
+
+# =========================
+# EXTRAIR PERFIL
+# =========================
+def extrair(texto):
+    try:
+        return {
+            "nome": limpar_nome(texto),
+            "nivel": int(re.search(r"Lv\s*(\d+)", texto).group(1)),
+            "xp": int(re.search(r"XP:\s*(\d+)", texto).group(1)),
+            "atk": int(re.search(r"ATK\s*(\d+)", texto).group(1)),
+            "def": float(re.search(r"DEF\s*([\d\.]+)", texto).group(1)),
+            "crit": int(re.search(r"CRIT\s*(\d+)", texto).group(1)),
+            "hp": int(re.search(r"HP:\s*\d+/(\d+)", texto).group(1)),
+            "gold": int(re.search(r"Gold:\s*(\d+)", texto).group(1)),
+            "tofu": int(re.search(r"Tofus:\s*(\d+)", texto).group(1))
+        }
+    except:
+        return None
 
 # =========================
 # SALVAR PLAYER
@@ -82,26 +101,7 @@ def registrar_presenca(nome):
     conn.commit()
 
 # =========================
-# EXTRAIR PERFIL
-# =========================
-def extrair(texto):
-    try:
-        return {
-            "nome": limpar_nome(texto),
-            "nivel": int(re.search(r"Lv\s*(\d+)", texto).group(1)),
-            "xp": int(re.search(r"XP:\s*(\d+)", texto).group(1)),
-            "atk": int(re.search(r"ATK\s*(\d+)", texto).group(1)),
-            "def": float(re.search(r"DEF\s*([\d\.]+)", texto).group(1)),
-            "crit": int(re.search(r"CRIT\s*(\d+)", texto).group(1)),
-            "hp": int(re.search(r"HP:\s*\d+/(\d+)", texto).group(1)),
-            "gold": int(re.search(r"Gold:\s*(\d+)", texto).group(1)),
-            "tofu": int(re.search(r"Tofus:\s*(\d+)", texto).group(1))
-        }
-    except:
-        return None
-
-# =========================
-# HANDLER (AGORA COM FILTRO)
+# HANDLER
 # =========================
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -150,4 +150,34 @@ async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for j in dados:
         txt += (
             f"👤 {j[0]}\n"
-            f"📈 Lv {j[1]} | XP {
+            f"📈 Lv {j[1]} | XP {j[2]}\n"
+            f"⚔️ ATK {j[3]} | 🛡️ DEF {j[4]}\n"
+            f"🎯 CRIT {j[5]} | ❤️ HP {j[6]}\n"
+            f"💰 Gold {j[7]} | 🧀 Tofus {j[8]}\n\n"
+        )
+
+    await update.message.reply_text(txt)
+
+# =========================
+# MAIN
+# =========================
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(MessageHandler(filters.ALL, responder))
+    app.add_handler(CommandHandler("ver", ver))
+
+    print("🚀 BOT INICIANDO...")
+
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False,
+        allowed_updates=["message"],
+        poll_interval=2
+    )
+
+# =========================
+# START
+# =========================
+if __name__ == "__main__":
+    main()
