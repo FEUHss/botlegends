@@ -63,28 +63,44 @@ def extrair_dados(texto):
 
 async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        print("---- NOVA MENSAGEM ----")
+
+        if not update.message:
+            print("Sem mensagem")
+            return
+
+        print("CHAT ID:", update.message.chat.id)
+        print("TOPIC ID:", update.message.message_thread_id)
+
         if update.message.chat.id != GROUP_ID:
+            print("Ignorado: chat diferente")
             return
 
         if update.message.message_thread_id != TOPIC_ID:
+            print("Ignorado: tópico diferente")
             return
 
-        texto = update.message.text
+        texto = update.message.text or update.message.caption
+
+        print("TEXTO:", texto)
 
         if not texto:
+            print("Sem texto")
             return
 
         if "Classe:" not in texto:
+            print("Não contém Classe:")
             return
 
         dados = extrair_dados(texto)
 
+        print("DADOS EXTRAIDOS:", dados)
+
         if not dados:
+            print("Falha no parsing")
             return
 
         nome, classe, nivel, atk, defesa, crit, hp = dados
-
-        print("SALVANDO:", dados)
 
         cursor.execute("""
             INSERT INTO perfis (nome, classe, nivel, atk, defesa, crit, hp)
@@ -99,6 +115,8 @@ async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """, (nome, classe, nivel, atk, defesa, crit, hp))
 
         conn.commit()
+
+        print(f"SALVO COM SUCESSO: {nome}")
 
     except Exception as e:
         print("ERRO AO SALVAR:", e)
@@ -125,7 +143,7 @@ async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, salvar))
+    app.add_handler(MessageHandler(filters.ALL, salvar))
     app.add_handler(CommandHandler("ver", ver))
 
     print("Bot rodando...")
