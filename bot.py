@@ -1,181 +1,132 @@
-import os
 import re
 import psycopg2
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters, CommandHandler
+import os
 
-TOKEN = os.getenv("TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+# ================= CONFIG =================
 
-if not DATABASE_URL:
-    raise Exception("DATABASE_URL não encontrado")
+TOKEN = os.getenv("BOT_TOKEN")
 
-conn = psycopg2.connect(DATABASE_URL)
+GROUP_ID = -1003792787717
+TOPIC_ID = 16325  # presença diária
+
+# ================= BANCO =================
+
+conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cursor = conn.cursor()
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS perfis (
-    user_id BIGINT PRIMARY KEY,
-    nome TEXT,
-    classe TEXT,
-    nivel INT,
-    atk INT,
-    defesa FLOAT,
-    crit INT,
-    hp INT
-)
-""")
-conn.commit()
+# ================= EXTRAÇÃO =================
 
-# IDs (mantidos)
-CHAT_ID = -1003792787717
-TOPICO_PRESENCA = 16325
-
-
-# =========================
-# PARSER ROBUSTO
-# =========================
-def extrair_perfil(texto):
+def extrair_dados(texto):
     try:
-        linhas = texto.split("\n")
+        # Nome (remove emojis e nível do começo)
+        nome_linha = texto.split("\n")[0]
+        nome = re.sub(r"[^\w\s,\[\]]", "", nome_linha)
+        nome = re.sub(r"\d+", "", nome).strip()
 
-        # NOME
-        nome = None
-        if linhas:
-            match_nome = re.search(r'\d+\s+(.*)', linhas[0])
-            if match_nome:
-                nome = match_nome.group(1).strip()
+        # Classe + nível
+        classe_match = re.search(r"Classe:\s*(\w+)\s*Lv\s*(\d+)", texto)
+        if classe_match:
+            classe = classe_match.group(1)
+            nivel = int(classe_match.group(2))
+        else:
+            classe = None
+            nivel = None
 
-        # CLASSE + NIVEL
-        match_classe = re.search(r'Classe:\s*(\w+)\s*Lv\s*(\d+)', texto, re.IGNORECASE)
-        if not match_classe:
-            return None
+        # ATK
+        atk_match = re.search(r"ATK\s*(\d+)", texto)
+        atk = int(atk_match.group(1)) if atk_match else None
 
-        classe = match_classe.group(1)
-        nivel = int(match_classe.group(2))
+        # DEF
+        def_match = re.search(r"DEF\s*([\d\.]+)", texto)
+        defesa = float(def_match.group(1)) if def_match else None
 
-        # ATRIBUTOS
-        atk = re.search(r'ATK\s*(\d+)', texto)
-        defesa = re.search(r'DEF\s*([\d.]+)', texto)
-        crit = re.search(r'CRIT\s*(\d+)%', texto)
-        hp = re.search(r'HP[:\s]*(\d+)/(\d+)', texto)
+        # CRIT
+        crit_match = re.search(r"CRIT\s*(\d+)%", texto)
+        crit = int(crit_match.group(1)) if crit_match else None
 
-        return {
-            "nome": nome,
-            "classe": classe,
-            "nivel": nivel,
-            "atk": int(atk.group(1)) if atk else 0,
-            "defesa": float(defesa.group(1)) if defesa else 0,
-            "crit": int(crit.group(1)) if crit else 0,
-            "hp": int(hp.group(2)) if hp else 0
-        }
+        # HP
+        hp_match = re.search(r"HP:\s*(\d+)/", texto)
+        hp = int(hp_match.group(1)) if hp_match else None
 
-    except:
+        return nome, classe, nivel, atk, defesa, crit, hp
+
+    except Exception as e:
+        print("Erro ao extrair:", e)
         return None
 
+# ================= SALVAR =================
 
-# =========================
-# SALVAR
-# =========================
 async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
+    try:
+        if update.message.chat.id != GROUP_ID:
+            return
 
-    if not msg:
-        return
+        if update.message.message_thread_id != TOPIC_ID:
+            return
 
-    if update.effective_chat.id != CHAT_ID:
-        return
+        texto = update.message.text
 
-    if msg.message_thread_id != TOPICO_PRESENCA:
-        return
+        if not texto:
+            return
 
-    # 🔥 CORREÇÃO CRÍTICA (mensagem encaminhada)
-    texto = msg.text or msg.caption
+        if "Classe:" not in texto:
+            return
 
-    if not texto:
-        return
+        dados = extrair_dados(texto)
 
-    perfil = extrair_perfil(texto)
+        if not dados:
+            return
 
-    if not perfil:
-        print("Falha ao extrair perfil")
-        return
+        nome, classe, nivel, atk, defesa, crit, hp = dados
 
-    user_id = msg.from_user.id
+        print("SALVANDO:", dados)
 
-    cursor.execute("""
-    INSERT INTO perfis (user_id, nome, classe, nivel, atk, defesa, crit, hp)
-    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-    ON CONFLICT (user_id) DO UPDATE SET
-    nome = EXCLUDED.nome,
-    classe = EXCLUDED.classe,
-    nivel = EXCLUDED.nivel,
-    atk = EXCLUDED.atk,
-    defesa = EXCLUDED.defesa,
-    crit = EXCLUDED.crit,
-    hp = EXCLUDED.hp
-    """, (
-        user_id,
-        perfil["nome"],
-        perfil["classe"],
-        perfil["nivel"],
-        perfil["atk"],
-        perfil["defesa"],
-        perfil["crit"],
-        perfil["hp"]
-    ))
+        cursor.execute("""
+            INSERT INTO perfis (nome, classe, nivel, atk, defesa, crit, hp)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (nome) DO UPDATE SET
+            classe = EXCLUDED.classe,
+            nivel = EXCLUDED.nivel,
+            atk = EXCLUDED.atk,
+            defesa = EXCLUDED.defesa,
+            crit = EXCLUDED.crit,
+            hp = EXCLUDED.hp
+        """, (nome, classe, nivel, atk, defesa, crit, hp))
 
-    conn.commit()
-    print(f"SALVO: {perfil['nome']}")
+        conn.commit()
 
+    except Exception as e:
+        print("ERRO AO SALVAR:", e)
 
-# =========================
-# /VER
-# =========================
+# ================= COMANDO /VER =================
+
 async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    cursor.execute("SELECT * FROM perfis WHERE user_id = %s", (user_id,))
-    dados = cursor.fetchone()
+    cursor.execute("SELECT nome, classe, nivel FROM perfis ORDER BY nivel DESC")
+    dados = cursor.fetchall()
 
     if not dados:
-        await update.message.reply_text("❌ Nenhum perfil salvo.")
+        await update.message.reply_text("Nenhum perfil salvo.")
         return
 
-    nome = dados[1]
-    classe = dados[2]
-    nivel = dados[3]
-    atk = dados[4]
-    defesa = dados[5]
-    crit = dados[6]
-    hp = dados[7]
+    msg = "📜 Perfis salvos:\n\n"
 
-    msg = (
-        f"📜 {nome}\n"
-        f"Classe: {classe}\n"
-        f"Lv {nivel}\n\n"
-        f"⚔️ ATK {atk}\n"
-        f"🛡️ DEF {defesa}\n"
-        f"🎯 CRIT {crit}%\n"
-        f"❤️ HP {hp}"
-    )
+    for nome, classe, nivel in dados:
+        msg += f"{nome} - {classe} Lv {nivel}\n"
 
     await update.message.reply_text(msg)
 
+# ================= MAIN =================
 
-# =========================
-# MAIN
-# =========================
 def main():
-    print("Bot iniciando...")
-
     app = ApplicationBuilder().token(TOKEN).build()
 
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, salvar))
     app.add_handler(CommandHandler("ver", ver))
-    app.add_handler(MessageHandler(filters.ALL, salvar))
 
+    print("Bot rodando...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
