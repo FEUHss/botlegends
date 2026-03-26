@@ -2,74 +2,76 @@ import os
 import re
 import psycopg2
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters, CommandHandler
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
 # ==============================
-# CONFIG (Railway)
+# CONFIG
 # ==============================
+
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# ==============================
-# CONFIG GRUPO / TÓPICO
-# ==============================
 GRUPO_ID = -1003792787717
-TOPICO_PRESENCA = 16325
+TOPICO_PERMITIDO = 16325
 
 # ==============================
-# CONEXÃO DATABASE
+# CONEXÃO DB
 # ==============================
-def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+
+conn = psycopg2.connect(DATABASE_URL)
+cursor = conn.cursor()
 
 # ==============================
-# LIMPAR TEXTO (remove emojis)
+# FUNÇÕES DE EXTRAÇÃO
 # ==============================
-def limpar(texto):
-    return re.sub(r"[^\w\s,.\-]", "", texto)
 
-# ==============================
-# EXTRAIR DADOS
-# ==============================
-def extrair_dados(texto):
+def extrair_nome(texto):
     try:
-        linhas = texto.split("\n")
+        # remove emojis do começo
+        texto = re.sub(r"^[^\w\d]+", "", texto)
 
-        # Nome (linha do papiro)
-        nome_linha = next(l for l in linhas if "📜" in l)
-        nome_limpo = limpar(nome_linha)
-
-        # Remove nível do começo
-        nome = re.sub(r"^\s*\d+\s*", "", nome_limpo).strip()
-
-        # Classe e nível
-        classe_linha = next(l for l in linhas if "Classe:" in l)
-        classe = classe_linha.split("Classe:")[1].split("Lv")[0].strip().lower()
-        nivel = int(re.search(r"Lv\s*(\d+)", classe_linha).group(1))
-
-        # ATK DEF CRIT HP
-        status_linha = next(l for l in linhas if "ATK" in l)
-
-        atk = int(re.search(r"ATK\s*(\d+)", status_linha).group(1))
-        defesa = float(re.search(r"DEF\s*([\d.]+)", status_linha).group(1))
-        crit = int(re.search(r"CRIT\s*(\d+)", status_linha).group(1))
-        hp = int(re.search(r"HP:\s*(\d+)", status_linha).group(1))
-
-        return nome, classe, nivel, atk, defesa, crit, hp
+        match = re.search(r"\d+\s+(.+)", texto)
+        if match:
+            nome = match.group(1).strip()
+            return nome
 
     except Exception as e:
-        print("ERRO AO EXTRAIR:", e)
-        return None
+        print("Erro ao extrair nome:", e)
+
+    return None
+
+
+def extrair_classe(texto):
+    match = re.search(r"Classe:\s*(\w+)", texto)
+    return match.group(1) if match else None
+
+
+def extrair_nivel(texto):
+    match = re.search(r"Lv\s*(\d+)", texto)
+    return int(match.group(1)) if match else None
+
+
+def extrair_stats(texto):
+    try:
+        atk = re.search(r"ATK\s*(\d+)", texto)
+        defesa = re.search(r"DEF\s*([\d\.]+)", texto)
+        crit = re.search(r"CRIT\s*(\d+)", texto)
+        hp = re.search(r"HP:\s*(\d+)", texto)
+
+        return (
+            int(atk.group(1)) if atk else None,
+            float(defesa.group(1)) if defesa else None,
+            int(crit.group(1)) if crit else None,
+            int(hp.group(1)) if hp else None,
+        )
+    except:
+        return (None, None, None, None)
 
 # ==============================
-# SALVAR NO BANCO (POR NOME)
+# SALVAR NO BANCO
 # ==============================
-def salvar_perfil(dados):
-    nome, classe, nivel, atk, defesa, crit, hp = dados
 
-    conn = get_conn()
-    cursor = conn.cursor()
-
+def salvar_perfil(nome, classe, nivel, atk, defesa, crit, hp):
     try:
         cursor.execute("""
             INSERT INTO perfis (nome, classe, nivel, atk, defesa, crit, hp)
@@ -80,91 +82,75 @@ def salvar_perfil(dados):
                 atk = EXCLUDED.atk,
                 defesa = EXCLUDED.defesa,
                 crit = EXCLUDED.crit,
-                hp = EXCLUDED.hp
+                hp = EXCLUDED.hp;
         """, (nome, classe, nivel, atk, defesa, crit, hp))
 
         conn.commit()
-        print(f"SALVO: {nome}")
+        print(f"SALVO/ATUALIZADO: {nome}")
 
     except Exception as e:
         print("ERRO AO SALVAR:", e)
 
-    finally:
-        cursor.close()
-        conn.close()
-
 # ==============================
-# CAPTURA DE MENSAGENS
+# HANDLER
 # ==============================
-async def receber(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
 
-    if not msg or not msg.text:
-        return
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        message = update.message
 
-    # Verifica grupo
-    if msg.chat.id != GRUPO_ID:
-        return
+        if not message or not message.text:
+            return
 
-    # Verifica tópico
-    if msg.message_thread_id != TOPICO_PRESENCA:
-        return
+        chat_id = message.chat.id
+        topic_id = message.message_thread_id
 
-    print("---- NOVA MENSAGEM ----")
-    print(msg.text)
+        if chat_id != GRUPO_ID:
+            return
 
-    dados = extrair_dados(msg.text)
+        if topic_id != TOPICO_PERMITIDO:
+            return
 
-    if dados:
-        print("DADOS EXTRAIDOS:", dados)
-        salvar_perfil(dados)
-    else:
-        print("Mensagem ignorada")
+        texto = message.text
 
-# ==============================
-# COMANDO /ver
-# ==============================
-async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    conn = get_conn()
-    cursor = conn.cursor()
+        print("\n---- NOVA MENSAGEM ----")
+        print("CHAT ID:", chat_id)
+        print("TOPIC ID:", topic_id)
+        print("TEXTO:", texto)
 
-    cursor.execute("""
-        SELECT nome, classe, nivel, atk, defesa, crit, hp
-        FROM perfis
-        ORDER BY nivel DESC
-        LIMIT 10
-    """)
+        nome = extrair_nome(texto)
+        classe = extrair_classe(texto)
+        nivel = extrair_nivel(texto)
+        atk, defesa, crit, hp = extrair_stats(texto)
 
-    resultados = cursor.fetchall()
+        print("NOME EXTRAIDO:", nome)
+        print("CLASSE:", classe)
+        print("NIVEL:", nivel)
+        print("STATS:", atk, defesa, crit, hp)
 
-    if not resultados:
-        await update.message.reply_text("Nenhum perfil salvo.")
-        return
+        if not nome:
+            print("❌ Nome não encontrado, ignorando...")
+            return
 
-    texto = "📊 Perfis salvos:\n\n"
+        salvar_perfil(nome, classe, nivel, atk, defesa, crit, hp)
 
-    for r in resultados:
-        texto += f"🏷 {r[0]}\n"
-        texto += f"Classe: {r[1]} | Lv {r[2]}\n"
-        texto += f"ATK {r[3]} | DEF {r[4]} | CRIT {r[5]} | HP {r[6]}\n\n"
-
-    await update.message.reply_text(texto)
-
-    cursor.close()
-    conn.close()
+    except Exception as e:
+        print("ERRO NO HANDLER:", e)
 
 # ==============================
 # MAIN
 # ==============================
+
 def main():
     print("Bot rodando...")
 
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber))
-    app.add_handler(CommandHandler("ver", ver))
+    app.add_handler(MessageHandler(filters.TEXT, handle_message))
 
     app.run_polling()
+
+# ==============================
 
 if __name__ == "__main__":
     main()
