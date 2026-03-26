@@ -113,7 +113,13 @@ async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Nenhum perfil salvo.")
         return
 
-    _, nome, classe, nivel, atk, defesa, crit, hp = dados
+    nome = dados[1]
+classe = dados[2]
+nivel = dados[3]
+atk = dados[4]
+defesa = dados[5]
+crit = dados[6]
+hp = dados[7]
 
     msg = (
         f"📜 {nome}\n"
