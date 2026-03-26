@@ -10,54 +10,84 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("DATABASE_URL não encontrado")
 
+# ID do tópico presença diária
+TOPICO_PRESENCA = 16325
+
+# conexão banco
 conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
-cursor.execute("CREATE TABLE IF NOT EXISTS perfis (user_id BIGINT PRIMARY KEY, nome TEXT, level INT, xp TEXT, atk TEXT, defesa TEXT, crit TEXT, hp TEXT, gold TEXT, tofu TEXT)")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS perfis (
+    user_id BIGINT PRIMARY KEY,
+    nome TEXT,
+    level INT,
+    xp BIGINT,
+    atk INT,
+    defesa FLOAT,
+    crit INT,
+    hp TEXT,
+    gold INT,
+    tofu INT
+)
+""")
 conn.commit()
-
-TOPICO_PRESENCA = 16325
 
 
 def extrair_dados(texto):
     try:
-        linhas = texto.split("\n")
+        nome = texto.split("\n")[0]
 
-        nome = linhas[0]
-
-        level = re.search(r"Lv (\d+)", texto)
-        xp = re.search(r"XP: ([\d]+)", texto)
-        atk = re.search(r"ATK (\d+)", texto)
-        defesa = re.search(r"DEF ([\d\.]+)", texto)
-        crit = re.search(r"CRIT (\d+%)", texto)
-        hp = re.search(r"HP: (\d+/\d+)", texto)
-        gold = re.search(r"Gold: (\d+)", texto)
-        tofu = re.search(r"Tofus: (\d+)", texto)
+        level = re.search(r"Lv\s+(\d+)", texto)
+        xp = re.search(r"XP:\s+([\d]+)", texto)
+        atk = re.search(r"ATK\s+(\d+)", texto)
+        defesa = re.search(r"DEF\s+([\d\.]+)", texto)
+        crit = re.search(r"CRIT\s+(\d+)", texto)
+        hp = re.search(r"HP:\s+([\d/]+)", texto)
+        gold = re.search(r"Gold:\s+(\d+)", texto)
+        tofu = re.search(r"Tofus:\s+(\d+)", texto)
 
         return {
             "nome": nome,
             "level": int(level.group(1)) if level else 0,
-            "xp": xp.group(1) if xp else "0",
-            "atk": atk.group(1) if atk else "0",
-            "defesa": defesa.group(1) if defesa else "0",
-            "crit": crit.group(1) if crit else "0%",
+            "xp": int(xp.group(1)) if xp else 0,
+            "atk": int(atk.group(1)) if atk else 0,
+            "defesa": float(defesa.group(1)) if defesa else 0,
+            "crit": int(crit.group(1)) if crit else 0,
             "hp": hp.group(1) if hp else "0/0",
-            "gold": gold.group(1) if gold else "0",
-            "tofu": tofu.group(1) if tofu else "0"
+            "gold": int(gold.group(1)) if gold else 0,
+            "tofu": int(tofu.group(1)) if tofu else 0
         }
+
     except:
         return None
 
 
 async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.message_thread_id != TOPICO_PRESENCA:
+    msg = update.message
+
+    if not msg:
         return
 
-    dados = extrair_dados(update.message.text)
+    # só salva no tópico correto
+    if msg.message_thread_id != TOPICO_PRESENCA:
+        return
+
+    texto = msg.text or msg.caption
+
+    if not texto:
+        return
+
+    # valida perfil
+    if "ATK" not in texto or "HP:" not in texto:
+        return
+
+    dados = extrair_dados(texto)
+
     if not dados:
         return
 
-    user_id = update.message.from_user.id
+    user_id = msg.from_user.id
 
     cursor.execute("""
         INSERT INTO perfis (user_id, nome, level, xp, atk, defesa, crit, hp, gold, tofu)
@@ -87,37 +117,43 @@ async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-    await update.message.reply_text("📜 O Pilar grava a sua jornada.")
+    print(f"SALVO: {dados['nome']} ({user_id})")
 
 
 async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
 
     cursor.execute("SELECT * FROM perfis WHERE user_id = %s", (user_id,))
-    j = cursor.fetchone()
+    result = cursor.fetchone()
 
-    if not j:
+    if not result:
         await update.message.reply_text("❌ Nenhum perfil salvo.")
         return
 
-    mensagem = f"""📈
-Lv {j[2]} | XP {j[3]}
-ATK {j[4]}
-DEF {j[5]}
-CRIT {j[6]}
-HP {j[7]}
-GOLD {j[8]}
-TOFU {j[9]}
-"""
+    msg = (
+        f"📜 {result[1]}\n"
+        f"📊 Lv {result[2]} | XP {result[3]}\n"
+        f"⚔️ ATK {result[4]}\n"
+        f"🛡️ DEF {result[5]}\n"
+        f"🎯 CRIT {result[6]}%\n"
+        f"❤️ HP {result[7]}\n"
+        f"💰 Gold {result[8]}\n"
+        f"🧀 Tofus {result[9]}"
+    )
 
-    await update.message.reply_text(mensagem)
+    await update.message.reply_text(msg)
 
 
-app = ApplicationBuilder().token(TOKEN).build()
+def main():
+    print("Bot iniciando...")
 
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, salvar))
-app.add_handler(CommandHandler("ver", ver))
+    app = ApplicationBuilder().token(TOKEN).build()
 
-print("🚀 BOT FINAL ATIVO (POSTGRES + FILTROS)")
+    app.add_handler(CommandHandler("ver", ver))
+    app.add_handler(MessageHandler(filters.ALL, salvar))
 
-app.run_polling()
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
