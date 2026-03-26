@@ -4,10 +4,13 @@ import unicodedata
 import os
 from telegram.ext import Application, MessageHandler, filters
 
+print("🚀 INICIO DO SCRIPT")
+
 TOKEN = os.getenv("TOKEN")
+print("🔑 TOKEN:", TOKEN)
 
 if not TOKEN:
-    raise ValueError("TOKEN não encontrado")
+    raise Exception("TOKEN NÃO ENCONTRADO")
 
 TOPICO_PRESENCA_ID = 16325
 
@@ -16,8 +19,12 @@ print("👑 BOT INICIANDO...")
 # =========================
 # BANCO
 # =========================
-conn = sqlite3.connect("legends.db", check_same_thread=False)
-cursor = conn.cursor()
+try:
+    conn = sqlite3.connect("legends.db", check_same_thread=False)
+    cursor = conn.cursor()
+    print("✅ BANCO OK")
+except Exception as e:
+    print("💥 ERRO BANCO:", e)
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS players (
@@ -37,4 +44,97 @@ status TEXT
 conn.commit()
 
 # =========================
-# NOME LIM
+# NOME
+# =========================
+def nome(txt):
+    linha = txt.split("\n")[0]
+    linha = unicodedata.normalize("NFD", linha)
+    linha = linha.encode("ascii","ignore").decode()
+    linha = re.sub(r"\[.*?\]", "", linha)
+    linha = re.sub(r"\d+", "", linha)
+    linha = re.sub(r"[^a-zA-Z\s]", "", linha)
+    return linha.strip().upper()
+
+# =========================
+# EXTRAIR
+# =========================
+def extrair(txt):
+    try:
+        n = nome(txt)
+        xp = int(re.search(r"XP:\s*(\d+)", txt).group(1))
+        return n, xp
+    except:
+        return None
+
+# =========================
+# SALVAR
+# =========================
+def salvar(n, xp):
+    cursor.execute("""
+    INSERT INTO players (nome,xp)
+    VALUES (?,?)
+    ON CONFLICT(nome) DO UPDATE SET xp=excluded.xp
+    """, (n, xp))
+    conn.commit()
+
+def registrar_presenca(n):
+    cursor.execute("SELECT 1 FROM presenca WHERE nome=? AND data=date('now')", (n,))
+    if cursor.fetchone():
+        return
+    cursor.execute("INSERT INTO presenca VALUES (?,date('now'),'P')", (n,))
+    conn.commit()
+
+# =========================
+# LEITOR
+# =========================
+async def ler(update, context):
+    try:
+        if not update.message:
+            return
+
+        if update.message.message_thread_id != TOPICO_PRESENCA_ID:
+            return
+
+        txt = update.message.text or update.message.caption
+        if not txt:
+            return
+
+        if "XP:" in txt:
+            dados = extrair(txt)
+            if dados:
+                n, xp = dados
+                salvar(n, xp)
+                registrar_presenca(n)
+                print("✔ SALVO:", n)
+
+    except Exception as e:
+        print("💥 ERRO LER:", e)
+
+# =========================
+# MAIN
+# =========================
+def main():
+    print("🚀 ENTRANDO NO MAIN")
+
+    try:
+        app = Application.builder().token(TOKEN).build()
+        print("✅ APP CRIADO")
+
+        app.add_handler(MessageHandler(filters.TEXT, ler))
+        print("✅ HANDLER OK")
+
+        print("👑 BOT ONLINE (ANTES DO POLLING)")
+
+        app.run_polling(
+            drop_pending_updates=True,
+            close_loop=False,
+            stop_signals=None
+        )
+
+        print("⚠️ ISSO NÃO DEVERIA APARECER")
+
+    except Exception as e:
+        print("💥 ERRO MAIN:", e)
+
+if __name__ == "__main__":
+    main()
