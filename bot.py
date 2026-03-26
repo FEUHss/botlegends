@@ -7,13 +7,27 @@ if not TOKEN:
     raise Exception("TOKEN não encontrado")
 
 async def responder(update, context):
-    if update.message:
+    try:
+        if not update:
+            return
+
+        if not update.message:
+            return
+
+        texto = update.message.text
+
+        if not texto:
+            return
+
         await update.message.reply_text("🔥 BOT ONLINE")
+
+    except Exception as e:
+        print("ERRO HANDLER:", e)
 
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT, responder))
+    app.add_handler(MessageHandler(filters.ALL, responder))
 
     print("🚀 BOT INICIADO")
 
