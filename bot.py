@@ -1,4 +1,5 @@
 import os
+import re
 from telegram import Update
 from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
@@ -7,19 +8,47 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise Exception("TOKEN não encontrado")
 
+# 🔥 ID DO TÓPICO DE PRESENÇA
+TOPICO_PRESENCA_ID = 16325
+
 # =========================
 # HANDLER
 # =========================
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
+    try:
+        if not update.message:
+            return
 
-    if not update.message.text:
-        return
+        # 🔥 FILTRO DE TÓPICO
+        if update.message.message_thread_id != TOPICO_PRESENCA_ID:
+            return
 
-    print("Mensagem recebida:", update.message.text)
+        texto = update.message.text
 
-    await update.message.reply_text("🔥 BOT ONLINE")
+        if not texto:
+            return
+
+        # 🔥 SÓ PROCESSA SE FOR PERFIL
+        if "XP:" not in texto:
+            return
+
+        # =========================
+        # EXTRAÇÃO DOS DADOS
+        # =========================
+        xp = int(re.search(r"XP:\s*(\d+)", texto).group(1))
+        atk = int(re.search(r"ATK\s*(\d+)", texto).group(1))
+        defesa = int(re.search(r"DEF\s*(\d+)", texto).group(1))
+        crit = int(re.search(r"CRIT\s*(\d+)", texto).group(1))
+        hp = int(re.search(r"HP:\s*\d+/(\d+)", texto).group(1))
+
+        # LOG (Railway)
+        print(f"XP: {xp} | ATK: {atk} | DEF: {defesa} | CRIT: {crit} | HP: {hp}")
+
+        # RESPOSTA
+        await update.message.reply_text("📜 O Pilar grava a sua jornada.")
+
+    except Exception as e:
+        print("ERRO HANDLER:", e)
 
 # =========================
 # MAIN
