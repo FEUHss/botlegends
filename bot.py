@@ -6,6 +6,9 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise Exception("TOKEN não encontrado")
 
+# =========================
+# HANDLER SEGURO
+# =========================
 async def responder(update, context):
     try:
         if not update:
@@ -24,6 +27,9 @@ async def responder(update, context):
     except Exception as e:
         print("ERRO HANDLER:", e)
 
+# =========================
+# MAIN
+# =========================
 def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -31,11 +37,5 @@ def main():
 
     print("🚀 BOT INICIADO")
 
-    app.run_polling(
-        drop_pending_updates=True,
-        close_loop=False,
-        stop_signals=None
-    )
-
-if __name__ == "__main__":
-    main()
+    # 🔥 LIMPA QUALQUER CONEXÃO ANTIGA (resolve Conflict)
+    try
