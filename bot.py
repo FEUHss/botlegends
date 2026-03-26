@@ -69,8 +69,8 @@ async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # só salva no tópico correto
-    if msg.message_thread_id != TOPICO_PRESENCA:
+    # ✅ CORREÇÃO APLICADA AQUI
+    if not msg.message_thread_id or int(msg.message_thread_id) != int(TOPICO_PRESENCA):
         return
 
     texto = msg.text or msg.caption
@@ -78,7 +78,6 @@ async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not texto:
         return
 
-    # valida perfil
     if "ATK" not in texto or "HP:" not in texto:
         return
 
@@ -123,37 +122,4 @@ async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    cursor.execute("SELECT * FROM perfis WHERE user_id = %s", (user_id,))
-    result = cursor.fetchone()
-
-    if not result:
-        await update.message.reply_text("❌ Nenhum perfil salvo.")
-        return
-
-    msg = (
-        f"📜 {result[1]}\n"
-        f"📊 Lv {result[2]} | XP {result[3]}\n"
-        f"⚔️ ATK {result[4]}\n"
-        f"🛡️ DEF {result[5]}\n"
-        f"🎯 CRIT {result[6]}%\n"
-        f"❤️ HP {result[7]}\n"
-        f"💰 Gold {result[8]}\n"
-        f"🧀 Tofus {result[9]}"
-    )
-
-    await update.message.reply_text(msg)
-
-
-def main():
-    print("Bot iniciando...")
-
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("ver", ver))
-    app.add_handler(MessageHandler(filters.ALL, salvar))
-
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+    cursor.execute("SELECT * FROM perfis WHERE user_id = %s",
