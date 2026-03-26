@@ -13,72 +13,95 @@ if not DATABASE_URL:
 conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
-# Criar tabela
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS perfis (
     user_id BIGINT PRIMARY KEY,
     nome TEXT,
     classe TEXT,
     nivel INT,
-    atk TEXT,
-    defesa TEXT,
-    crit TEXT,
-    hp TEXT
+    atk INT,
+    defesa FLOAT,
+    crit INT,
+    hp INT
 )
 """)
 conn.commit()
 
-# IDs
+# IDs (mantidos)
 CHAT_ID = -1003792787717
 TOPICO_PRESENCA = 16325
 
 
+# =========================
+# PARSER ROBUSTO
+# =========================
 def extrair_perfil(texto):
     try:
-        nome = re.search(r"\d+\s(.+)", texto).group(1)
-        classe = re.search(r"Classe:\s(.+)", texto).group(1)
-        nivel = int(re.search(r"Lv\s(\d+)", texto).group(1))
-        atk = re.search(r"ATK\s(\d+)", texto).group(1)
-        defesa = re.search(r"DEF\s([\d\.]+)", texto).group(1)
-        crit = re.search(r"CRIT\s(\d+%)", texto).group(1)
-        hp = re.search(r"HP:\s([\d/]+)", texto).group(1)
+        linhas = texto.split("\n")
+
+        # NOME
+        nome = None
+        if linhas:
+            match_nome = re.search(r'\d+\s+(.*)', linhas[0])
+            if match_nome:
+                nome = match_nome.group(1).strip()
+
+        # CLASSE + NIVEL
+        match_classe = re.search(r'Classe:\s*(\w+)\s*Lv\s*(\d+)', texto, re.IGNORECASE)
+        if not match_classe:
+            return None
+
+        classe = match_classe.group(1)
+        nivel = int(match_classe.group(2))
+
+        # ATRIBUTOS
+        atk = re.search(r'ATK\s*(\d+)', texto)
+        defesa = re.search(r'DEF\s*([\d.]+)', texto)
+        crit = re.search(r'CRIT\s*(\d+)%', texto)
+        hp = re.search(r'HP[:\s]*(\d+)/(\d+)', texto)
 
         return {
             "nome": nome,
             "classe": classe,
             "nivel": nivel,
-            "atk": atk,
-            "defesa": defesa,
-            "crit": crit,
-            "hp": hp
+            "atk": int(atk.group(1)) if atk else 0,
+            "defesa": float(defesa.group(1)) if defesa else 0,
+            "crit": int(crit.group(1)) if crit else 0,
+            "hp": int(hp.group(2)) if hp else 0
         }
+
     except:
         return None
 
 
+# =========================
+# SALVAR
+# =========================
 async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
+    msg = update.message
+
+    if not msg:
         return
 
     if update.effective_chat.id != CHAT_ID:
         return
 
-    # 🔥 CORREÇÃO AQUI (forma robusta de pegar o tópico)
-    thread_id = getattr(update.message, "message_thread_id", None)
-
-    if thread_id is None or int(thread_id) != int(TOPICO_PRESENCA):
+    if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
-    texto = update.message.text
+    # 🔥 CORREÇÃO CRÍTICA (mensagem encaminhada)
+    texto = msg.text or msg.caption
 
-    if "Classe:" not in texto:
+    if not texto:
         return
 
     perfil = extrair_perfil(texto)
+
     if not perfil:
+        print("Falha ao extrair perfil")
         return
 
-    user_id = update.message.from_user.id
+    user_id = msg.from_user.id
 
     cursor.execute("""
     INSERT INTO perfis (user_id, nome, classe, nivel, atk, defesa, crit, hp)
@@ -103,8 +126,12 @@ async def salvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ))
 
     conn.commit()
+    print(f"SALVO: {perfil['nome']}")
 
 
+# =========================
+# /VER
+# =========================
 async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
@@ -129,20 +156,23 @@ async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Lv {nivel}\n\n"
         f"⚔️ ATK {atk}\n"
         f"🛡️ DEF {defesa}\n"
-        f"🎯 CRIT {crit}\n"
+        f"🎯 CRIT {crit}%\n"
         f"❤️ HP {hp}"
     )
 
     await update.message.reply_text(msg)
 
 
+# =========================
+# MAIN
+# =========================
 def main():
     print("Bot iniciando...")
 
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("ver", ver))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), salvar))
+    app.add_handler(MessageHandler(filters.ALL, salvar))
 
     app.run_polling()
 
