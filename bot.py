@@ -2,9 +2,8 @@ import re
 import sqlite3
 import unicodedata
 import os
-import asyncio
 from datetime import time
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters
+from telegram.ext import Application, MessageHandler, CommandHandler, filters
 
 TOKEN = os.getenv("TOKEN")
 
@@ -92,7 +91,7 @@ def presenca(n):
     return True
 
 # =========================
-# RANKS
+# RANK XP
 # =========================
 async def rank(update, _):
     cursor.execute("SELECT nome,xp FROM players ORDER BY xp DESC LIMIT 10")
@@ -102,6 +101,9 @@ async def rank(update, _):
         txt += f"{i}. {n} — {v}\n"
     await update.message.reply_text(txt or "Sem dados")
 
+# =========================
+# EVOLUÇÃO XP
+# =========================
 async def xpdia(update, _):
     res=[]
     cursor.execute("SELECT DISTINCT nome FROM historico")
@@ -185,16 +187,15 @@ async def ler(update,_):
         await update.message.reply_text("Drop registrado")
 
 # =========================
-# MAIN (NÃO PARA)
+# MAIN
 # =========================
-async def main():
-    app=ApplicationBuilder().token(TOKEN).build()
+def main():
+    app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("rank",rank))
     app.add_handler(CommandHandler("xpdia",xpdia))
     app.add_handler(CommandHandler("missao",missao))
     app.add_handler(CommandHandler("dropslg",dropslg))
-
     app.add_handler(MessageHandler(filters.ALL,ler))
 
     if app.job_queue:
@@ -202,10 +203,7 @@ async def main():
 
     print("👑 BOT ONLINE")
 
-    await app.initialize()
-    await app.start()
-
-    await asyncio.Event().wait()
+    app.run_polling(close_loop=False)
 
 if __name__=="__main__":
-    asyncio.run(main())
+    main()
