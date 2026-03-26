@@ -5,6 +5,9 @@ from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("TOKEN")
 
+# 🔥 DEBUG DO TOKEN (ESSENCIAL)
+print("TOKEN LIDO:", TOKEN)
+
 if not TOKEN:
     raise Exception("TOKEN não encontrado")
 
