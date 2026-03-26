@@ -9,10 +9,11 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, fil
 # TOKEN
 # =========================
 TOKEN = os.getenv("TOKEN")
-print("TOKEN LIDO:", TOKEN)
 
 if not TOKEN:
-    raise ValueError("TOKEN NÃO FOI ENCONTRADO NO RAILWAY")
+    raise ValueError("TOKEN não encontrado no Railway")
+
+print("👑 BOT INICIANDO...")
 
 # =========================
 # CONFIG
@@ -60,7 +61,7 @@ def salvar(nome, xp):
     conn.commit()
 
 # =========================
-# COMANDOS
+# COMANDO XP
 # =========================
 async def xp(update, context):
     cursor.execute("SELECT nome, xp FROM players ORDER BY xp DESC LIMIT 10")
@@ -102,11 +103,15 @@ async def ler(update, context):
 # =========================
 # START
 # =========================
-app = ApplicationBuilder().token(TOKEN).build()
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("xp", xp))
-app.add_handler(MessageHandler(filters.ALL, ler))
+    app.add_handler(CommandHandler("xp", xp))
+    app.add_handler(MessageHandler(filters.ALL, ler))
 
-print("👑 BOT INICIANDO...")
+    print("👑 BOT ONLINE")
 
-app.run_polling()
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
