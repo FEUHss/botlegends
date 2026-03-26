@@ -7,7 +7,7 @@ if not TOKEN:
     raise Exception("TOKEN não encontrado")
 
 # =========================
-# HANDLER SEGURO
+# HANDLER
 # =========================
 async def responder(update, context):
     try:
@@ -37,5 +37,19 @@ def main():
 
     print("🚀 BOT INICIADO")
 
-    # 🔥 LIMPA QUALQUER CONEXÃO ANTIGA (resolve Conflict)
-    try
+    try:
+        app.bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print("Erro ao limpar webhook:", e)
+
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False,
+        stop_signals=None
+    )
+
+# =========================
+# START
+# =========================
+if __name__ == "__main__":
+    main()
