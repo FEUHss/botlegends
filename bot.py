@@ -1,23 +1,18 @@
 import os
 import psycopg2
-from datetime import datetime
+from datetime import datetime, date
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    CommandHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ================= CONFIG =================
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
+
 GRUPO_LIDERANCA = -1003806440152
+TOPICO_PAINEL = 116
 
 conn = psycopg2.connect(DATABASE_URL)
 
@@ -38,40 +33,122 @@ def extrair_nome(texto):
     return None
 
 
+# ================= BANCO =================
+
 def registrar_membro(nome):
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
-        (nome,),
-    )
+    cur.execute("INSERT INTO membros VALUES (%s) ON CONFLICT DO NOTHING", (nome,))
     conn.commit()
 
 
 def salvar_presenca(nome):
-    hoje = datetime.now().date()
+    hoje = date.today()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT 1 FROM presencas WHERE nome=%s AND data=%s",
-        (nome, hoje),
-    )
-
+    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje))
     if cur.fetchone():
         return False
 
-    cur.execute(
-        "INSERT INTO presencas (nome, data) VALUES (%s, %s)",
-        (nome, hoje),
-    )
+    cur.execute("INSERT INTO presencas VALUES (%s,%s)", (nome, hoje))
     conn.commit()
     return True
+
+
+# ================= PAINEL =================
+
+def gerar_texto_painel():
+    hoje = date.today()
+    cur = conn.cursor()
+
+    cur.execute("SELECT nome FROM membros")
+    membros = [m[0] for m in cur.fetchall()]
+
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
+    presentes = [p[0] for p in cur.fetchall()]
+
+    faltantes = sorted(set(membros) - set(presentes))
+    presentes = sorted(presentes)
+
+    texto = f"📋 PRESENÇA - {hoje.strftime('%d/%m')}\n\n"
+
+    texto += "🟢 Presentes:\n"
+    texto += "\n".join([f"✅ {n}" for n in presentes]) or "Ninguém ainda"
+
+    texto += "\n\n🔴 Ausentes:\n"
+    texto += "\n".join([f"❌ {n}" for n in faltantes]) or "Nenhum"
+
+    texto += f"\n\n📊 {len(presentes)}/{len(membros)}"
+
+    return texto
+
+
+async def atualizar_painel(app):
+    hoje = date.today()
+    cur = conn.cursor()
+
+    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje,))
+    result = cur.fetchone()
+
+    if not result:
+        return
+
+    message_id = result[0]
+
+    texto = gerar_texto_painel()
+
+    await app.bot.edit_message_text(
+        chat_id=GRUPO_LIDERANCA,
+        message_id=message_id,
+        text=texto,
+        message_thread_id=TOPICO_PAINEL
+    )
+
+
+async def criar_painel(app):
+    hoje = date.today()
+    texto = gerar_texto_painel()
+
+    msg = await app.bot.send_message(
+        chat_id=GRUPO_LIDERANCA,
+        text=texto,
+        message_thread_id=TOPICO_PAINEL
+    )
+
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO painel VALUES (%s,%s) ON CONFLICT DO NOTHING",
+        (hoje, msg.message_id)
+    )
+    conn.commit()
+
+
+# ================= FALTAS =================
+
+def marcar_faltas():
+    hoje = date.today()
+    cur = conn.cursor()
+
+    cur.execute("SELECT nome FROM membros")
+    membros = [m[0] for m in cur.fetchall()]
+
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
+    presentes = [p[0] for p in cur.fetchall()]
+
+    faltantes = set(membros) - set(presentes)
+
+    for nome in faltantes:
+        cur.execute(
+            "INSERT INTO faltas VALUES (%s,%s) ON CONFLICT DO NOTHING",
+            (nome, hoje)
+        )
+
+    conn.commit()
 
 
 # ================= DETECÇÃO =================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-
     if not msg:
         return
 
@@ -79,9 +156,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if msg.message_thread_id != TOPICO_PRESENCA:
-        return
-
-    if msg.text and msg.text.startswith("/"):
         return
 
     texto = msg.text or msg.caption
@@ -96,109 +170,7 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if salvar_presenca(nome):
         await msg.reply_text(f"✅ Presença: {nome}")
-
-
-# ================= COMANDOS =================
-
-async def presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.chat.id != GRUPO_LIDERANCA:
-        return
-
-    hoje = datetime.now().date()
-    cur = conn.cursor()
-
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
-    dados = cur.fetchall()
-
-    if not dados:
-        await update.message.reply_text("📋 Ninguém marcou presença hoje.")
-        return
-
-    texto = "📋 Presença de hoje:\n\n"
-    texto += "\n".join([f"✅ {n[0]}" for n in dados])
-
-    await update.message.reply_text(texto)
-
-
-async def mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.chat.id != GRUPO_LIDERANCA:
-        return
-
-    cur = conn.cursor()
-
-    cur.execute("""
-    SELECT m.nome,
-           COUNT(p.data) as presencas,
-           COUNT(f.data) as faltas
-    FROM membros m
-    LEFT JOIN presencas p ON m.nome = p.nome
-        AND date_trunc('month', p.data) = date_trunc('month', CURRENT_DATE)
-    LEFT JOIN faltas f ON m.nome = f.nome
-        AND date_trunc('month', f.data) = date_trunc('month', CURRENT_DATE)
-    GROUP BY m.nome
-    ORDER BY m.nome
-    """)
-
-    dados = cur.fetchall()
-
-    texto = "📊 Relatório mensal:\n\n"
-
-    for nome, pres, falt in dados:
-        texto += f"{nome}: ✅ {pres} | ❌ {falt}\n"
-
-    await update.message.reply_text(texto)
-
-
-# ================= FALTAS AUTOMÁTICAS =================
-
-def marcar_faltas():
-    hoje = datetime.now().date()
-    cur = conn.cursor()
-
-    cur.execute("SELECT nome FROM membros")
-    membros = [m[0] for m in cur.fetchall()]
-
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
-    presentes = [p[0] for p in cur.fetchall()]
-
-    faltantes = set(membros) - set(presentes)
-
-    for nome in faltantes:
-        cur.execute(
-            "INSERT INTO faltas (nome, data) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            (nome, hoje),
-        )
-
-    conn.commit()
-    print(f"🚫 Faltas registradas: {len(faltantes)}")
-
-
-# ================= RELATÓRIO =================
-
-async def relatorio_mensal_job(app):
-    cur = conn.cursor()
-
-    cur.execute("""
-    SELECT m.nome,
-           COUNT(p.data),
-           COUNT(f.data)
-    FROM membros m
-    LEFT JOIN presencas p ON m.nome = p.nome
-        AND date_trunc('month', p.data) = date_trunc('month', CURRENT_DATE)
-    LEFT JOIN faltas f ON m.nome = f.nome
-        AND date_trunc('month', f.data) = date_trunc('month', CURRENT_DATE)
-    GROUP BY m.nome
-    ORDER BY m.nome
-    """)
-
-    dados = cur.fetchall()
-
-    texto = "🏆 RELATÓRIO FINAL DO MÊS:\n\n"
-
-    for nome, pres, falt in dados:
-        texto += f"{nome}: ✅ {pres} | ❌ {falt}\n"
-
-    await app.bot.send_message(GRUPO_LIDERANCA, texto)
+        await atualizar_painel(context.application)
 
 
 # ================= MAIN =================
@@ -206,36 +178,37 @@ async def relatorio_mensal_job(app):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("presenca", presenca))
-    app.add_handler(CommandHandler("mensal", mensal))
-
     app.add_handler(MessageHandler(filters.ALL, detectar))
 
     scheduler = AsyncIOScheduler()
 
-    # 🔥 FALTAS AUTOMÁTICAS
-    scheduler.add_job(marcar_faltas, "cron", hour=23, minute=59)
-
-    # 🔥 RELATÓRIO MENSAL
+    # criar painel 00:00
     scheduler.add_job(
-        lambda: app.create_task(relatorio_mensal_job(app)),
+        lambda: app.create_task(criar_painel(app)),
         "cron",
-        day="last",
+        hour=0,
+        minute=0
+    )
+
+    # finalizar dia 23:59
+    scheduler.add_job(
+        marcar_faltas,
+        "cron",
         hour=23,
-        minute=59,
+        minute=59
     )
 
     async def start_scheduler(app):
         scheduler.start()
-        print("🧠 Scheduler iniciado")
+        await criar_painel(app)
+        print("🧠 Scheduler + painel iniciado")
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot com faltas automáticas rodando...")
+    print("🚀 Bot com painel profissional rodando...")
 
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
-
