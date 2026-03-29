@@ -1,26 +1,25 @@
 import os
 import re
+import random
 import psycopg2
 from datetime import datetime
-
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# ================= CONFIG =================
+# ================== CONFIG ==================
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-CLAN_CHAT_ID = -1003792787717
+GRUPO_ORIGEM = -1003792787717
 TOPICO_PRESENCA = 16325
 
-LIDER_CHAT_ID = -1003806440152
+GRUPO_DESTINO = -1003806440152
 TOPICO_LISTA = 116
 
-# ================= BANCO =================
+# ================== BANCO ==================
 
 conn = psycopg2.connect(DATABASE_URL)
-conn.autocommit = True
 cur = conn.cursor()
 
 cur.execute("""
@@ -30,150 +29,69 @@ CREATE TABLE IF NOT EXISTS presencas (
     PRIMARY KEY (nome, data)
 )
 """)
+conn.commit()
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS membros (
-    nome TEXT PRIMARY KEY
-)
-""")
+# ================== FRASES DO PILAR ==================
 
-# ================= FUNÇÕES =================
+def gerar_confirmacao(nome):
+    frases = [
+        f"📜 O Pilar registra: {nome} esteve presente.",
+        f"🗿 O Pilar da Sabedoria reconhece {nome}.",
+        f"✨ A presença de {nome} foi gravada no Pilar.",
+        f"👑 O Pilar eterniza: {nome} marcou presença.",
+        f"🔥 Feixes dourados registram a presença de {nome}.",
+        f"🧠 O conhecimento do Pilar agora carrega o nome de {nome}.",
+        f"⚡ Registrado: {nome}"
+    ]
+    return random.choice(frases)
+
+# ================== FUNÇÕES ==================
 
 def extrair_nome(texto):
-    """
-    Extrai nome do perfil Teletofus
-    """
-    match = re.search(r"\d+\s+(.+?)\nClasse:", texto)
-    if match:
-        nome = match.group(1).strip()
+    if not texto:
+        return None
 
-        # remove [LG] ou qualquer tag
-        nome = re.sub(r"\[.*?\]", "", nome).strip()
+    # pega padrões comuns do Teletofus
+    padrao = re.search(r"\d+\s+LG\s*([A-Za-zÀ-ÿ0-9_ ]+)", texto)
+    if padrao:
+        return padrao.group(1).strip()
 
-        return nome.upper()
+    # fallback mais flexível
+    padrao2 = re.search(r"\d+\s+([A-Za-zÀ-ÿ0-9_ ]+)", texto)
+    if padrao2:
+        return padrao2.group(1).strip()
 
     return None
 
 
-def eh_perfil_teletofus(msg):
-    texto = msg.text or msg.caption or ""
-
-    # DEBUG (pode remover depois)
-    print("DEBUG TEXTO:", texto[:80])
-
-    if (
-        "Classe:" in texto and
-        "Lv" in texto and
-        "HP:" in texto and
-        "Energia:" in texto
-    ):
-        return True
-
-    return False
-
-
 def salvar_presenca(nome):
-    hoje = datetime.now().date()
+    hoje = datetime.utcnow().date()
 
     try:
         cur.execute(
             "INSERT INTO presencas (nome, data) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             (nome, hoje)
         )
-
-        cur.execute(
-            "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
-            (nome,)
-        )
-
+        conn.commit()
         return True
-
     except Exception as e:
-        print("ERRO BANCO:", e)
         conn.rollback()
+        print("ERRO AO SALVAR:", e)
         return False
 
 
-async def atualizar_lista(context):
-    hoje = datetime.now().date()
-
-    cur.execute("SELECT nome FROM membros ORDER BY nome")
-    todos = [r[0] for r in cur.fetchall()]
-
-    cur.execute("SELECT nome FROM presencas WHERE data = %s", (hoje,))
-    presentes = [r[0] for r in cur.fetchall()]
-
-    faltantes = [n for n in todos if n not in presentes]
-
-    texto = "📋 PRESENÇA DIÁRIA\n\n"
-
-    texto += "✅ PRESENTES:\n"
-    for nome in presentes:
-        texto += f"✔ {nome}\n"
-
-    texto += "\n❌ FALTANTES:\n"
-    for nome in faltantes:
-        texto += f"✖ {nome}\n"
-
-    await context.bot.send_message(
-        chat_id=LIDER_CHAT_ID,
-        message_thread_id=TOPICO_LISTA,
-        text=texto
-    )
-
-
-# ================= HANDLER =================
+# ================== HANDLER ==================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-
-    if not msg:
+    if not update.message:
         return
 
-    # Só grupo correto
-    if msg.chat_id != CLAN_CHAT_ID:
+    # 🔒 filtra grupo correto
+    if update.effective_chat.id != GRUPO_ORIGEM:
         return
 
-    # Só tópico correto
-    if msg.message_thread_id != TOPICO_PRESENCA:
+    # 🔒 filtra tópico correto
+    if update.message.message_thread_id != TOPICO_PRESENCA:
         return
 
-    texto = msg.text or msg.caption or ""
-
-    # Só aceita perfil válido
-    if not eh_perfil_teletofus(msg):
-        print("IGNORADO: não é perfil")
-        return
-
-    nome = extrair_nome(texto)
-
-    if not nome:
-        print("IGNORADO: não extraiu nome")
-        return
-
-    print("NOME DETECTADO:", nome)
-
-    if salvar_presenca(nome):
-        await context.bot.send_message(
-            chat_id=LIDER_CHAT_ID,
-            message_thread_id=TOPICO_LISTA,
-            text=f"✅ Presença: {nome}"
-        )
-
-        await atualizar_lista(context)
-
-
-# ================= MAIN =================
-
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(MessageHandler(filters.ALL, detectar))
-
-    print("🚀 Bot rodando...")
-
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+    texto = update.message.text or update.message.caption or ""
