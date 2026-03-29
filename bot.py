@@ -42,28 +42,31 @@ CREATE TABLE IF NOT EXISTS membros (
 def extrair_nome(texto):
     """
     Extrai nome do perfil Teletofus
-    Funciona com:
-    - [LG] Nome
-    - Nome simples
     """
     match = re.search(r"\d+\s+(.+?)\nClasse:", texto)
     if match:
         nome = match.group(1).strip()
-        nome = re.sub(r"\[.*?\]", "", nome).strip()  # remove [LG]
+
+        # remove [LG] ou qualquer tag
+        nome = re.sub(r"\[.*?\]", "", nome).strip()
+
         return nome.upper()
+
     return None
 
 
 def eh_perfil_teletofus(msg):
-    if not msg.forward_from:
-        return False
-
-    if msg.forward_from.username != "Teletofus":
-        return False
-
     texto = msg.text or msg.caption or ""
 
-    if "Classe:" in texto and "Lv" in texto and "HP:" in texto:
+    # DEBUG (pode remover depois)
+    print("DEBUG TEXTO:", texto[:80])
+
+    if (
+        "Classe:" in texto and
+        "Lv" in texto and
+        "HP:" in texto and
+        "Energia:" in texto
+    ):
         return True
 
     return False
@@ -86,7 +89,7 @@ def salvar_presenca(nome):
         return True
 
     except Exception as e:
-        print("Erro ao salvar:", e)
+        print("ERRO BANCO:", e)
         conn.rollback()
         return False
 
@@ -127,22 +130,28 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # Só lê da aba correta
+    # Só grupo correto
     if msg.chat_id != CLAN_CHAT_ID:
         return
 
+    # Só tópico correto
     if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
+    texto = msg.text or msg.caption or ""
+
     # Só aceita perfil válido
     if not eh_perfil_teletofus(msg):
+        print("IGNORADO: não é perfil")
         return
 
-    texto = msg.text or msg.caption or ""
     nome = extrair_nome(texto)
 
     if not nome:
+        print("IGNORADO: não extraiu nome")
         return
+
+    print("NOME DETECTADO:", nome)
 
     if salvar_presenca(nome):
         await context.bot.send_message(
