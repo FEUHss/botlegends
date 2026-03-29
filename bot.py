@@ -59,7 +59,7 @@ def salvar_presenca(nome):
     return True
 
 
-# ================= HANDLER (OTIMIZADO) =================
+# ================= DETECÇÃO =================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -67,15 +67,15 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # 🔒 Só aceita grupo principal
+    # 🔒 Só grupo principal
     if msg.chat.id != GRUPO_ID:
         return
 
-    # 🔒 Só aceita tópico de presença
+    # 🔒 Só tópico de presença
     if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
-    # ❗ ignora comandos
+    # ignora comandos
     if msg.text and msg.text.startswith("/"):
         return
 
@@ -147,9 +147,9 @@ async def mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto)
 
 
-# ================= AGENDADOR =================
+# ================= RELATÓRIO AUTOMÁTICO =================
 
-async def relatorio_mensal(context: ContextTypes.DEFAULT_TYPE):
+async def relatorio_mensal_job(app):
     cur = conn.cursor()
 
     cur.execute(
@@ -172,11 +172,13 @@ async def relatorio_mensal(context: ContextTypes.DEFAULT_TYPE):
     for nome, pres in dados:
         texto += f"{nome}: {pres} presenças\n"
 
-    await context.bot.send_message(
+    await app.bot.send_message(
         chat_id=GRUPO_LIDERANCA,
         text=texto
     )
 
+
+# ================= RESET DIÁRIO =================
 
 def reset_diario():
     print("🕛 Reset diário executado")
@@ -204,16 +206,15 @@ def main():
     # reset diário
     scheduler.add_job(reset_diario, "cron", hour=0, minute=0)
 
-    # relatório mensal
-    scheduler.add_job(relatorio_mensal, "cron", day="last", hour=23, minute=59)
+    # relatório mensal (CORRIGIDO)
+    scheduler.add_job(
+        lambda: app.create_task(relatorio_mensal_job(app)),
+        "cron",
+        day="last",
+        hour=23,
+        minute=59,
+    )
 
     scheduler.start()
 
-    print("🚀 Bot presença profissional rodando (otimizado)...")
-
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
-
+    print("🚀 Bot presença DEFINITIVO rodando...")
