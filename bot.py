@@ -5,9 +5,9 @@ import os
 
 TOKEN = os.getenv("TOKEN")
 
-GRUPO_ID = -1003792787717  # grupo da guilda
+GRUPO_ID = -1003792787717
+TOPICO_PRESENCA = 16325
 
-# Lista base de membros
 MEMBROS = set([
     "ARCHANGEL",
     "CHURO",
@@ -35,16 +35,9 @@ presencas = set()
 # =========================
 def limpar_nome(nome):
     nome = nome.upper()
-
-    # remove [TAG]
     nome = re.sub(r"\[.*?\]", "", nome)
-
-    # remove emojis/símbolos
     nome = re.sub(r"[^\w\s,]", "", nome)
-
-    # remove espaços extras
     nome = re.sub(r"\s+", " ", nome).strip()
-
     return nome
 
 # =========================
@@ -55,27 +48,36 @@ def extrair_nome(texto):
         texto = re.sub(r"^[^\w\d]+", "", texto)
         match = re.search(r"\d+\s+(.+)", texto)
         if match:
-            nome = match.group(1)
-            return limpar_nome(nome)
+            return limpar_nome(match.group(1))
     except:
         return None
 
 # =========================
-# CAPTURA DE PERFIL (SÓ GRUPO)
+# CAPTURA (COM TÓPICO)
 # =========================
 async def capturar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
-    if not msg or not msg.text:
+    if not msg:
         return
 
-    # 🔒 Só funciona no grupo
+    print("🔥 CHEGOU MENSAGEM")
+    print("CHAT:", msg.chat.id)
+    print("THREAD:", msg.message_thread_id)
+
+    # 🔒 garante que é do grupo certo
     if msg.chat.id != GRUPO_ID:
+        return
+
+    # 🔒 garante que é da aba presença diária
+    if msg.message_thread_id != TOPICO_PRESENCA:
+        return
+
+    if not msg.text:
         return
 
     texto = msg.text
 
-    # garante que é perfil
     if "Classe:" not in texto:
         return
 
@@ -85,11 +87,11 @@ async def capturar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if nome:
         presencas.add(nome)
-        MEMBROS.add(nome)  # adiciona novos automaticamente
+        MEMBROS.add(nome)
         print(f"✅ Presença registrada: {nome}")
 
 # =========================
-# COMANDO /presenca (FUNCIONA EM QUALQUER LUGAR)
+# COMANDO /presenca
 # =========================
 async def ver_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resposta = "📋 PRESENÇA DO DIA\n\n"
@@ -113,14 +115,13 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # =========================
 def main():
-    print("Bot presença inteligente rodando...")
+    print("Bot presença com tópico rodando...")
 
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # captura mensagens (grupo)
-    app.add_handler(MessageHandler(filters.TEXT, capturar))
+    # 🔥 IMPORTANTE: usar ALL
+    app.add_handler(MessageHandler(filters.ALL, capturar))
 
-    # comandos (funcionam em qualquer chat)
     app.add_handler(CommandHandler("presenca", ver_presenca))
     app.add_handler(CommandHandler("reset", reset))
 
