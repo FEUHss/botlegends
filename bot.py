@@ -1,211 +1,233 @@
 import os
 import re
+import asyncio
+from datetime import datetime, date
+
 import psycopg2
-from datetime import datetime
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-TOKEN = os.getenv("TOKEN")
+# ================= CONFIG =================
 
-# IDs
-GRUPO_PRESENCA = -1003792787717
+TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# 📥 GRUPO DO CLÃ (onde lê)
+GRUPO_CLAN = -1003792787717
 TOPICO_PRESENCA = 16325
 
-GRUPO_LIDERANCA = -1003806440152
+# 📤 GRUPO LIDERANÇA (onde envia)
+GRUPO_LIDER = -1003806440152
+TOPICO_LISTA = 116
 
-# conexão banco
-conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-cur = conn.cursor()
+# ==========================================
+
+conn = psycopg2.connect(DATABASE_URL)
+conn.autocommit = True
 
 
-# =========================
-# BANCO
-# =========================
+# ================= BANCO =================
+
+def criar_tabelas():
+    with conn.cursor() as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS membros (
+            nome TEXT PRIMARY KEY
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS presencas (
+            nome TEXT,
+            data DATE,
+            UNIQUE(nome, data)
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS faltas (
+            nome TEXT,
+            data DATE,
+            UNIQUE(nome, data)
+        );
+        """)
+
+
+# ================= FILTRO PERFIL =================
+
+def eh_perfil(texto: str):
+    texto = texto.lower()
+
+    pontos = 0
+    if "classe:" in texto: pontos += 1
+    if "lv" in texto: pontos += 1
+    if "hp:" in texto: pontos += 1
+    if "energia:" in texto: pontos += 1
+
+    return pontos >= 3
+
+
+# ================= EXTRAIR NOME =================
+
+def extrair_nome(texto):
+    linhas = texto.split("\n")
+
+    for linha in linhas:
+        if "lv" in linha.lower():
+            match = re.search(r"\]\s*(.+)", linha)
+            if match:
+                return match.group(1).strip().upper()
+
+    return None
+
+
+# ================= BANCO =================
 
 def registrar_membro(nome):
-    try:
+    with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
+            "INSERT INTO membros VALUES (%s) ON CONFLICT DO NOTHING",
             (nome,)
         )
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        print("ERRO registrar_membro:", e)
 
 
 def salvar_presenca(nome):
-    hoje = datetime.now().date()
-    try:
-        cur.execute(
-            "INSERT INTO presencas (nome, data) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            (nome, hoje)
-        )
-        conn.commit()
-        return True
-    except Exception as e:
-        conn.rollback()
-        print("ERRO salvar_presenca:", e)
-        return False
+    hoje = date.today()
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO presencas VALUES (%s, %s)
+            ON CONFLICT DO NOTHING
+        """, (nome, hoje))
 
 
-# =========================
-# FILTRO DE PERFIL
-# =========================
+def ja_marcou(nome):
+    hoje = date.today()
 
-def eh_perfil(texto: str):
-    return (
-        "Classe:" in texto and
-        "Lv" in texto and
-        "HP:" in texto
-    )
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT 1 FROM presencas WHERE nome=%s AND data=%s
+        """, (nome, hoje))
+        return cur.fetchone() is not None
 
 
-# =========================
-# EXTRAIR NOME (ROBUSTO)
-# =========================
+def gerar_faltas():
+    hoje = date.today()
 
-def extrair_nome(texto: str):
-    try:
-        linhas = texto.split("\n")[0]
+    with conn.cursor() as cur:
+        cur.execute("SELECT nome FROM membros")
+        membros = [x[0] for x in cur.fetchall()]
 
-        # remove emojis iniciais
-        linhas = re.sub(r"^[^\w\[]+", "", linhas)
+        cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
+        presentes = [x[0] for x in cur.fetchall()]
 
-        # remove nível (ex: 37)
-        linhas = re.sub(r"^\d+\s*", "", linhas)
+        faltantes = set(membros) - set(presentes)
 
-        # remove classe emoji tipo 🏹 🛡️ 💫
-        linhas = re.sub(r"[^\w\s\[\],]", "", linhas)
-
-        # remove "Classe" se colado
-        linhas = linhas.split("Classe")[0]
-
-        nome = linhas.strip()
-
-        # remove prefixos tipo [LG]
-        nome = re.sub(r"\[.*?\]\s*", "", nome)
-
-        return nome.upper()
-    except:
-        return None
+        for nome in faltantes:
+            cur.execute("""
+                INSERT INTO faltas VALUES (%s, %s)
+                ON CONFLICT DO NOTHING
+            """, (nome, hoje))
 
 
-# =========================
-# DETECTOR DE MENSAGEM
-# =========================
+def resumo_dia():
+    hoje = date.today()
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
+        presentes = [x[0] for x in cur.fetchall()]
+
+        cur.execute("SELECT nome FROM faltas WHERE data=%s", (hoje,))
+        faltantes = [x[0] for x in cur.fetchall()]
+
+    texto = "📊 PRESENÇA DO DIA\n\n"
+
+    texto += "✅ Presentes:\n"
+    for p in sorted(presentes):
+        texto += f"✔ {p}\n"
+
+    texto += "\n❌ Faltaram:\n"
+    for f in sorted(faltantes):
+        texto += f"✖ {f}\n"
+
+    return texto
+
+
+# ================= HANDLER =================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-
-    if not msg or not msg.text:
+    if not msg:
         return
 
-    # 🔥 FILTRO DE GRUPO
-    if msg.chat_id != GRUPO_PRESENCA:
+    # 👇 FILTRO DE ORIGEM (CLÃ)
+    if msg.chat.id != GRUPO_CLAN:
         return
 
-    # 🔥 FILTRO DE TÓPICO
     if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
-    texto = msg.text
+    texto = msg.text or ""
 
-    print("🔥 CHEGOU MENSAGEM")
-
-    # 🔒 FILTRO DE PERFIL (ESSENCIAL)
     if not eh_perfil(texto):
-        print("❌ Ignorado (não é perfil)")
         return
 
     nome = extrair_nome(texto)
-
     if not nome:
-        print("❌ Não encontrou nome")
         return
-
-    print(f"✅ Nome: {nome}")
 
     registrar_membro(nome)
 
-    if salvar_presenca(nome):
-        await msg.reply_text(f"✅ Presença: {nome}")
-    else:
-        print("⚠️ Já registrado hoje")
-
-
-# =========================
-# COMANDO PRESENÇA
-# =========================
-
-async def presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != GRUPO_LIDERANCA:
+    if ja_marcou(nome):
         return
 
-    hoje = datetime.now().date()
+    salvar_presenca(nome)
 
-    cur.execute("SELECT nome FROM presencas WHERE data = %s ORDER BY nome", (hoje,))
-    presentes = [r[0] for r in cur.fetchall()]
-
-    if not presentes:
-        await update.message.reply_text("📭 Ninguém marcou presença hoje.")
-        return
-
-    texto = "📋 Presença de hoje:\n\n"
-    texto += "\n".join([f"✅ {n}" for n in presentes])
-
-    await update.message.reply_text(texto)
+    # 👇 ENVIA PARA LIDERANÇA
+    await context.bot.send_message(
+        chat_id=GRUPO_LIDER,
+        message_thread_id=TOPICO_LISTA,
+        text=f"✅ Presença: {nome}"
+    )
 
 
-# =========================
-# COMANDO MENSAL
-# =========================
+# ================= AGENDAMENTO =================
 
-async def mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != GRUPO_LIDERANCA:
-        return
+async def tarefa_diaria(app):
+    while True:
+        agora = datetime.now()
 
-    mes = datetime.now().month
-    ano = datetime.now().year
+        if agora.hour == 23 and agora.minute == 59:
+            gerar_faltas()
 
-    cur.execute("""
-        SELECT nome, COUNT(*) 
-        FROM presencas 
-        WHERE EXTRACT(MONTH FROM data) = %s
-        AND EXTRACT(YEAR FROM data) = %s
-        GROUP BY nome
-        ORDER BY COUNT(*) DESC
-    """, (mes, ano))
+            texto = resumo_dia()
 
-    dados = cur.fetchall()
+            await app.bot.send_message(
+                chat_id=GRUPO_LIDER,
+                message_thread_id=TOPICO_LISTA,
+                text=texto
+            )
 
-    if not dados:
-        await update.message.reply_text("📭 Sem dados no mês.")
-        return
+            await asyncio.sleep(60)
 
-    texto = "📊 Presença mensal:\n\n"
-
-    for nome, total in dados:
-        texto += f"👤 {nome} → {total} dias\n"
-
-    await update.message.reply_text(texto)
+        await asyncio.sleep(20)
 
 
-# =========================
-# MAIN
-# =========================
+# ================= MAIN =================
 
-def main():
-    print("🚀 Bot presença inteligente rodando...")
+async def main():
+    criar_tabelas()
 
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT, detectar))
-    app.add_handler(CommandHandler("presenca", presenca))
-    app.add_handler(CommandHandler("mensal", mensal))
 
-    app.run_polling()
+    asyncio.create_task(tarefa_diaria(app))
+
+    print("🚀 Bot rodando...")
+
+    await app.run_polling()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
