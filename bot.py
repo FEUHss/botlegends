@@ -1,156 +1,125 @@
-import os
-import re
-import psycopg2
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-
-# ==============================
-# CONFIG
-# ==============================
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
+import re
+import os
 
 TOKEN = os.getenv("TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
 
 GRUPO_ID = -1003792787717
-TOPICO_PERMITIDO = 16325
 
-# ==============================
-# CONEXÃO DB
-# ==============================
+# Lista base (pode crescer automaticamente)
+MEMBROS = set([
+    "ARCHANGEL",
+    "CHURO",
+    "GROMATH, O URSO",
+    "MARLON",
+    "LINK",
+    "HENRIQUE",
+    "LUIZ CARLOS",
+    "JOSHUA",
+    "G.K",
+    "JHON, O IMENSO",
+    "ARTORIAS",
+    "BIGSLOW",
+    "GENERICO",
+    "KVN",
+    "KAZAN",
+    "KAZUKKIDRAGNAK",
+    "K"
+])
 
-conn = psycopg2.connect(DATABASE_URL)
-cursor = conn.cursor()
+presencas = set()
 
-# ==============================
-# FUNÇÕES DE EXTRAÇÃO
-# ==============================
+# =========================
+# LIMPAR NOME
+# =========================
+def limpar_nome(nome):
+    nome = nome.upper()
 
+    # remove [LG]
+    nome = re.sub(r"\[.*?\]", "", nome)
+
+    # remove emojis e símbolos
+    nome = re.sub(r"[^\w\s,]", "", nome)
+
+    # remove múltiplos espaços
+    nome = re.sub(r"\s+", " ", nome).strip()
+
+    return nome
+
+# =========================
+# EXTRAIR NOME DO PERFIL
+# =========================
 def extrair_nome(texto):
     try:
-        # remove emojis do começo
         texto = re.sub(r"^[^\w\d]+", "", texto)
-
         match = re.search(r"\d+\s+(.+)", texto)
         if match:
-            nome = match.group(1).strip()
-            return nome
-
-    except Exception as e:
-        print("Erro ao extrair nome:", e)
-
-    return None
-
-
-def extrair_classe(texto):
-    match = re.search(r"Classe:\s*(\w+)", texto)
-    return match.group(1) if match else None
-
-
-def extrair_nivel(texto):
-    match = re.search(r"Lv\s*(\d+)", texto)
-    return int(match.group(1)) if match else None
-
-
-def extrair_stats(texto):
-    try:
-        atk = re.search(r"ATK\s*(\d+)", texto)
-        defesa = re.search(r"DEF\s*([\d\.]+)", texto)
-        crit = re.search(r"CRIT\s*(\d+)", texto)
-        hp = re.search(r"HP:\s*(\d+)", texto)
-
-        return (
-            int(atk.group(1)) if atk else None,
-            float(defesa.group(1)) if defesa else None,
-            int(crit.group(1)) if crit else None,
-            int(hp.group(1)) if hp else None,
-        )
+            nome = match.group(1)
+            return limpar_nome(nome)
     except:
-        return (None, None, None, None)
+        return None
 
-# ==============================
-# SALVAR NO BANCO
-# ==============================
+# =========================
+# CAPTURA
+# =========================
+async def capturar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
 
-def salvar_perfil(nome, classe, nivel, atk, defesa, crit, hp):
-    try:
-        cursor.execute("""
-            INSERT INTO perfis (nome, classe, nivel, atk, defesa, crit, hp)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (nome) DO UPDATE SET
-                classe = EXCLUDED.classe,
-                nivel = EXCLUDED.nivel,
-                atk = EXCLUDED.atk,
-                defesa = EXCLUDED.defesa,
-                crit = EXCLUDED.crit,
-                hp = EXCLUDED.hp;
-        """, (nome, classe, nivel, atk, defesa, crit, hp))
+    if not msg or not msg.text:
+        return
 
-        conn.commit()
-        print(f"SALVO/ATUALIZADO: {nome}")
+    if msg.chat.id != GRUPO_ID:
+        return
 
-    except Exception as e:
-        print("ERRO AO SALVAR:", e)
+    texto = msg.text
 
-# ==============================
-# HANDLER
-# ==============================
+    if "Classe:" not in texto:
+        return
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        message = update.message
+    nome = extrair_nome(texto)
 
-        if not message or not message.text:
-            return
+    print("NOME DETECTADO:", nome)
 
-        chat_id = message.chat.id
-        topic_id = message.message_thread_id
+    if nome:
+        presencas.add(nome)
+        MEMBROS.add(nome)  # adiciona automaticamente novos players
+        print(f"✅ Presença: {nome}")
 
-        if chat_id != GRUPO_ID:
-            return
+# =========================
+# COMANDO /presenca
+# =========================
+async def ver_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    resposta = "📋 PRESENÇA DO DIA\n\n"
 
-        if topic_id != TOPICO_PERMITIDO:
-            return
+    for membro in sorted(MEMBROS):
+        if membro in presencas:
+            resposta += f"✅ {membro}\n"
+        else:
+            resposta += f"❌ {membro}\n"
 
-        texto = message.text
+    await update.message.reply_text(resposta)
 
-        print("\n---- NOVA MENSAGEM ----")
-        print("CHAT ID:", chat_id)
-        print("TOPIC ID:", topic_id)
-        print("TEXTO:", texto)
+# =========================
+# RESET
+# =========================
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    presencas.clear()
+    await update.message.reply_text("🔄 Presença resetada.")
 
-        nome = extrair_nome(texto)
-        classe = extrair_classe(texto)
-        nivel = extrair_nivel(texto)
-        atk, defesa, crit, hp = extrair_stats(texto)
-
-        print("NOME EXTRAIDO:", nome)
-        print("CLASSE:", classe)
-        print("NIVEL:", nivel)
-        print("STATS:", atk, defesa, crit, hp)
-
-        if not nome:
-            print("❌ Nome não encontrado, ignorando...")
-            return
-
-        salvar_perfil(nome, classe, nivel, atk, defesa, crit, hp)
-
-    except Exception as e:
-        print("ERRO NO HANDLER:", e)
-
-# ==============================
+# =========================
 # MAIN
-# ==============================
-
+# =========================
 def main():
-    print("Bot rodando...")
+    print("Bot presença inteligente rodando...")
 
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT, capturar))
+    app.add_handler(CommandHandler("presenca", ver_presenca))
+    app.add_handler(CommandHandler("reset", reset))
 
     app.run_polling()
-
-# ==============================
 
 if __name__ == "__main__":
     main()
