@@ -17,7 +17,6 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
-
 GRUPO_LIDERANCA = -1003806440152
 
 conn = psycopg2.connect(DATABASE_URL)
@@ -67,15 +66,12 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # 🔒 Só grupo principal
     if msg.chat.id != GRUPO_ID:
         return
 
-    # 🔒 Só tópico de presença
     if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
-    # ignora comandos
     if msg.text and msg.text.startswith("/"):
         return
 
@@ -178,8 +174,6 @@ async def relatorio_mensal_job(app):
     )
 
 
-# ================= RESET DIÁRIO =================
-
 def reset_diario():
     print("🕛 Reset diário executado")
 
@@ -189,24 +183,16 @@ def reset_diario():
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # comandos
     app.add_handler(CommandHandler("presenca", presenca))
     app.add_handler(CommandHandler("mensal", mensal))
 
-    # handler otimizado
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT | filters.PHOTO | filters.CaptionRegex(".*"),
-            detectar,
-        )
-    )
+    # 🔥 CORREÇÃO AQUI
+    app.add_handler(MessageHandler(filters.ALL, detectar))
 
     scheduler = AsyncIOScheduler()
 
-    # reset diário
     scheduler.add_job(reset_diario, "cron", hour=0, minute=0)
 
-    # relatório mensal (CORRIGIDO)
     scheduler.add_job(
         lambda: app.create_task(relatorio_mensal_job(app)),
         "cron",
@@ -217,4 +203,10 @@ def main():
 
     scheduler.start()
 
-    print("🚀 Bot presença DEFINITIVO rodando...")
+    print("🚀 Bot presença FINAL rodando...")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
