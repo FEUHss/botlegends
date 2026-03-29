@@ -1,7 +1,6 @@
 import os
 import re
 import random
-import asyncio
 from datetime import datetime, date
 
 import psycopg2
@@ -37,7 +36,7 @@ def set_lista_msg_id(msg_id):
         VALUES ('lista_msg_id', %s)
         ON CONFLICT (chave)
         DO UPDATE SET valor = EXCLUDED.valor
-    """, (str(msg_id),))
+    """, (str(msg_id) if msg_id else None,))
 
 def registrar_membro(nome):
     cur = conn.cursor()
@@ -113,7 +112,7 @@ async def atualizar_lista(bot):
         set_lista_msg_id(msg.message_id)
 
 # =========================
-# CONFIRMAÇÃO LORE
+# CONFIRMAÇÃO
 # =========================
 
 frases = [
@@ -129,7 +128,7 @@ def resposta(nome):
     return random.choice(frases).format(nome=nome)
 
 # =========================
-# DETECTOR DE PERFIL
+# DETECTOR
 # =========================
 
 def extrair_nome(texto):
@@ -157,16 +156,14 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     salvar_presenca(nome)
 
     await update.message.reply_text(resposta(nome))
-
     await atualizar_lista(context.bot)
 
 # =========================
-# FECHAMENTO 23:59
+# FECHAMENTO
 # =========================
 
 async def fechar_dia(bot):
-    texto = "📊 RELATÓRIO FINAL DO DIA\n\n"
-    texto += gerar_lista()
+    texto = "📊 RELATÓRIO FINAL DO DIA\n\n" + gerar_lista()
 
     await bot.send_message(
         chat_id=CHAT_ID_LIDER,
@@ -174,34 +171,34 @@ async def fechar_dia(bot):
         text=texto
     )
 
-    # limpa presenças do dia
     cur = conn.cursor()
     cur.execute("DELETE FROM presencas WHERE data=%s", (date.today(),))
 
-    # reseta lista
     set_lista_msg_id(None)
 
-async def scheduler(app):
-    while True:
-        agora = datetime.now()
-        if agora.hour == 23 and agora.minute == 59:
-            await fechar_dia(app.bot)
-            await asyncio.sleep(60)
-        await asyncio.sleep(30)
-
 # =========================
-# MAIN
+# SCHEDULER (CORRIGIDO)
 # =========================
 
-async def main():
+async def check_horario(context: ContextTypes.DEFAULT_TYPE):
+    agora = datetime.now()
+    if agora.hour == 23 and agora.minute == 59:
+        await fechar_dia(context.bot)
+
+# =========================
+# MAIN (CORRIGIDO)
+# =========================
+
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT, detectar))
 
-    asyncio.create_task(scheduler(app))
+    # scheduler estável (SEM asyncio.run / SEM loop duplicado)
+    app.job_queue.run_repeating(check_horario, interval=30, first=10)
 
     print("🚀 Bot rodando...")
-    await app.run_polling()
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
