@@ -1,131 +1,110 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
-import re
 import os
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
+# ================= CONFIG =================
 TOKEN = os.getenv("TOKEN")
+
+if not TOKEN:
+    raise ValueError("❌ TOKEN não encontrado nas variáveis do Railway")
 
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
 
-MEMBROS = set([
-    "ARCHANGEL",
-    "CHURO",
-    "GROMATH, O URSO",
-    "MARLON",
-    "LINK",
-    "HENRIQUE",
-    "LUIZ CARLOS",
-    "JOSHUA",
-    "G.K",
-    "JHON, O IMENSO",
-    "ARTORIAS",
-    "BIGSLOW",
-    "GENERICO",
-    "KVN",
-    "KAZAN",
-    "KAZUKKIDRAGNAK",
-    "K"
-])
+# ==========================================
 
-presencas = set()
+logging.basicConfig(level=logging.INFO)
 
-# =========================
-# LIMPAR NOME
-# =========================
+
+# 🔹 LIMPAR NOME
 def limpar_nome(nome):
-    nome = nome.upper()
-    nome = re.sub(r"\[.*?\]", "", nome)
-    nome = re.sub(r"[^\w\s,]", "", nome)
-    nome = re.sub(r"\s+", " ", nome).strip()
-    return nome
+    return (
+        nome.replace("[LG]", "")
+        .replace("*", "")
+        .replace("_", "")
+        .replace("`", "")
+        .strip()
+        .upper()
+    )
 
-# =========================
-# EXTRAIR NOME
-# =========================
+
+# 🔹 EXTRAIR NOME DO PERFIL
 def extrair_nome(texto):
     try:
-        texto = re.sub(r"^[^\w\d]+", "", texto)
-        match = re.search(r"\d+\s+(.+)", texto)
-        if match:
-            return limpar_nome(match.group(1))
-    except:
+        linhas = texto.split("\n")
+
+        for linha in linhas:
+            if "📜" in linha:
+                partes = linha.split()
+
+                for i, parte in enumerate(partes):
+                    if parte.isdigit():
+                        nome = " ".join(partes[i + 1:])
+                        return limpar_nome(nome)
+
         return None
 
-# =========================
-# CAPTURA (COM TÓPICO)
-# =========================
-async def capturar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    except Exception as e:
+        print("Erro ao extrair nome:", e)
+        return None
+
+
+# 🔥 HANDLER PRINCIPAL
+async def detectar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
     if not msg:
         return
 
-    print("🔥 CHEGOU MENSAGEM")
-    print("CHAT:", msg.chat.id)
-    print("THREAD:", msg.message_thread_id)
+    chat_id = msg.chat.id
+    thread_id = msg.message_thread_id
 
-    # 🔒 garante que é do grupo certo
-    if msg.chat.id != GRUPO_ID:
+    print("\n🔥 CHEGOU MENSAGEM")
+    print("CHAT:", chat_id)
+    print("THREAD:", thread_id)
+
+    # 🔒 FILTRO DO GRUPO E TÓPICO
+    if chat_id == GRUPO_ID:
+        if thread_id != TOPICO_PRESENCA:
+            return
+
+    # 📥 TEXTO OU CAPTION (imagem encaminhada usa caption!)
+    texto = msg.text or msg.caption
+
+    if not texto:
+        print("❌ Sem texto")
         return
 
-    # 🔒 garante que é da aba presença diária
-    if msg.message_thread_id != TOPICO_PRESENCA:
-        return
-
-    if not msg.text:
-        return
-
-    texto = msg.text
-
-    if "Classe:" not in texto:
-        return
-
+    # 🔍 EXTRAIR NOME
     nome = extrair_nome(texto)
 
-    print("NOME DETECTADO:", nome)
+    if not nome:
+        print("❌ Nome não encontrado")
+        return
 
-    if nome:
-        presencas.add(nome)
-        MEMBROS.add(nome)
-        print(f"✅ Presença registrada: {nome}")
+    print("✅ NOME DETECTADO:", nome)
 
-# =========================
-# COMANDO /presenca
-# =========================
-async def ver_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    resposta = "📋 PRESENÇA DO DIA\n\n"
+    # ✅ RESPONDER
+    await msg.reply_text(f"✅ Presença registrada: {nome}")
 
-    for membro in sorted(MEMBROS):
-        if membro in presencas:
-            resposta += f"✅ {membro}\n"
-        else:
-            resposta += f"❌ {membro}\n"
 
-    await update.message.reply_text(resposta)
+# 🔹 COMANDO START
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Bot de presença ativo!")
 
-# =========================
-# RESET
-# =========================
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    presencas.clear()
-    await update.message.reply_text("🔄 Presença resetada.")
 
-# =========================
-# MAIN
-# =========================
+# 🚀 MAIN
 def main():
-    print("Bot presença com tópico rodando...")
-
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # 🔥 IMPORTANTE: usar ALL
-    app.add_handler(MessageHandler(filters.ALL, capturar))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.ALL, detectar_presenca))
 
-    app.add_handler(CommandHandler("presenca", ver_presenca))
-    app.add_handler(CommandHandler("reset", reset))
+    print("🚀 Bot presença inteligente rodando...")
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
