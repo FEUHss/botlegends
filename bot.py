@@ -18,7 +18,6 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
 
-# ✅ SEU GRUPO DE LIDERANÇA
 GRUPO_LIDERANCA = -1003806440152
 
 conn = psycopg2.connect(DATABASE_URL)
@@ -60,19 +59,24 @@ def salvar_presenca(nome):
     return True
 
 
-# ================= HANDLER =================
+# ================= HANDLER (OTIMIZADO) =================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+
     if not msg:
         return
 
-    # ignora comandos
-    if msg.text and msg.text.startswith("/"):
+    # 🔒 Só aceita grupo principal
+    if msg.chat.id != GRUPO_ID:
         return
 
-    # filtra grupo + tópico
-    if msg.chat.id == GRUPO_ID and msg.message_thread_id != TOPICO_PRESENCA:
+    # 🔒 Só aceita tópico de presença
+    if msg.message_thread_id != TOPICO_PRESENCA:
+        return
+
+    # ❗ ignora comandos
+    if msg.text and msg.text.startswith("/"):
         return
 
     texto = msg.text or msg.caption
@@ -123,4 +127,93 @@ async def mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         SELECT nome, COUNT(*) 
         FROM presencas
-        WHERE date
+        WHERE date_trunc('month', data) = date_trunc('month', CURRENT_DATE)
+        GROUP BY nome
+        ORDER BY nome
+        """
+    )
+
+    dados = cur.fetchall()
+
+    if not dados:
+        await update.message.reply_text("📊 Sem dados esse mês.")
+        return
+
+    texto = "📊 Relatório mensal:\n\n"
+
+    for nome, pres in dados:
+        texto += f"{nome}: {pres} presenças\n"
+
+    await update.message.reply_text(texto)
+
+
+# ================= AGENDADOR =================
+
+async def relatorio_mensal(context: ContextTypes.DEFAULT_TYPE):
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT nome, COUNT(*) 
+        FROM presencas
+        WHERE date_trunc('month', data) = date_trunc('month', CURRENT_DATE)
+        GROUP BY nome
+        ORDER BY nome
+        """
+    )
+
+    dados = cur.fetchall()
+
+    if not dados:
+        return
+
+    texto = "🏆 RELATÓRIO FINAL DO MÊS:\n\n"
+
+    for nome, pres in dados:
+        texto += f"{nome}: {pres} presenças\n"
+
+    await context.bot.send_message(
+        chat_id=GRUPO_LIDERANCA,
+        text=texto
+    )
+
+
+def reset_diario():
+    print("🕛 Reset diário executado")
+
+
+# ================= MAIN =================
+
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    # comandos
+    app.add_handler(CommandHandler("presenca", presenca))
+    app.add_handler(CommandHandler("mensal", mensal))
+
+    # handler otimizado
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT | filters.PHOTO | filters.CaptionRegex(".*"),
+            detectar,
+        )
+    )
+
+    scheduler = AsyncIOScheduler()
+
+    # reset diário
+    scheduler.add_job(reset_diario, "cron", hour=0, minute=0)
+
+    # relatório mensal
+    scheduler.add_job(relatorio_mensal, "cron", day="last", hour=23, minute=59)
+
+    scheduler.start()
+
+    print("🚀 Bot presença profissional rodando (otimizado)...")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
+
