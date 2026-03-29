@@ -1,140 +1,207 @@
 import os
 import re
 import random
+import asyncio
+from datetime import datetime, date
+
 import psycopg2
-from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-
-print("🔥 INICIANDO BOT...")
-
-# ================== CONFIG ==================
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-GRUPO_ORIGEM = -1003792787717
+CHAT_ID_ORIGEM = -1003792787717
 TOPICO_PRESENCA = 16325
 
-GRUPO_DESTINO = -1003806440152
+CHAT_ID_LIDER = -1003806440152
 TOPICO_LISTA = 116
 
-# ================== BANCO ==================
-
 conn = psycopg2.connect(DATABASE_URL)
-cur = conn.cursor()
+conn.autocommit = True
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS presencas (
-    nome TEXT,
-    data DATE,
-    PRIMARY KEY (nome, data)
-)
-""")
-conn.commit()
+# =========================
+# BANCO
+# =========================
 
-# ================== UTIL ==================
+def get_lista_msg_id():
+    cur = conn.cursor()
+    cur.execute("SELECT valor FROM config WHERE chave='lista_msg_id'")
+    res = cur.fetchone()
+    return int(res[0]) if res else None
 
-def limpar_nome(nome):
-    return re.sub(r"[^\w\s]", "", nome).strip()
+def set_lista_msg_id(msg_id):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO config (chave, valor)
+        VALUES ('lista_msg_id', %s)
+        ON CONFLICT (chave)
+        DO UPDATE SET valor = EXCLUDED.valor
+    """, (str(msg_id),))
 
-def gerar_confirmacao(nome):
-    frases = [
-        f"📜 O Pilar registra: {nome} esteve presente.",
-        f"🗿 O Pilar da Sabedoria reconhece {nome}.",
-        f"✨ A presença de {nome} foi gravada no Pilar.",
-        f"👑 O Pilar eterniza: {nome} marcou presença.",
-        f"🔥 Feixes dourados registram a presença de {nome}.",
-        f"🧠 O conhecimento do Pilar agora carrega o nome de {nome}.",
-        f"⚡ Registrado: {nome}"
-    ]
-    return random.choice(frases)
-
-def extrair_nome(texto):
-    if not texto:
-        return None
-
-    match = re.search(r"\d+\s+\[LG\]\s*([^\n]+)", texto)
-    if match:
-        nome = match.group(1).strip()
-        return limpar_nome(nome)
-
-    match2 = re.search(r"\d+\s+([^\n]+)", texto)
-    if match2:
-        nome = match2.group(1).strip()
-        return limpar_nome(nome)
-
-    return None
+def registrar_membro(nome):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO membros VALUES (%s)
+        ON CONFLICT DO NOTHING
+    """, (nome,))
 
 def salvar_presenca(nome):
-    hoje = datetime.utcnow().date()
-    try:
-        cur.execute(
-            "INSERT INTO presencas (nome, data) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            (nome, hoje)
-        )
-        conn.commit()
-        return True
-    except Exception as e:
-        conn.rollback()
-        print("❌ ERRO BANCO:", e)
-        return False
+    hoje = date.today()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO presencas VALUES (%s, %s)
+        ON CONFLICT DO NOTHING
+    """, (nome, hoje))
 
-# ================== HANDLER ==================
+def get_presentes():
+    hoje = date.today()
+    cur = conn.cursor()
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
+    return [r[0] for r in cur.fetchall()]
+
+def get_membros():
+    cur = conn.cursor()
+    cur.execute("SELECT nome FROM membros")
+    return [r[0] for r in cur.fetchall()]
+
+# =========================
+# LISTA
+# =========================
+
+def gerar_lista():
+    presentes = sorted(get_presentes())
+    membros = sorted(get_membros())
+
+    faltantes = [m for m in membros if m not in presentes]
+
+    texto = "📋 PRESENÇA DIÁRIA\n\n"
+
+    texto += "✅ PRESENTES:\n"
+    for p in presentes:
+        texto += f"✔ {p}\n"
+
+    texto += "\n❌ FALTANTES:\n"
+    for f in faltantes:
+        texto += f"✖ {f}\n"
+
+    return texto
+
+# =========================
+# ATUALIZAR LISTA
+# =========================
+
+async def atualizar_lista(bot):
+    texto = gerar_lista()
+    msg_id = get_lista_msg_id()
+
+    try:
+        if msg_id:
+            await bot.edit_message_text(
+                chat_id=CHAT_ID_LIDER,
+                message_id=msg_id,
+                text=texto
+            )
+        else:
+            raise Exception("sem msg")
+    except:
+        msg = await bot.send_message(
+            chat_id=CHAT_ID_LIDER,
+            message_thread_id=TOPICO_LISTA,
+            text=texto
+        )
+        set_lista_msg_id(msg.message_id)
+
+# =========================
+# CONFIRMAÇÃO LORE
+# =========================
+
+frases = [
+    "📜 O Pilar registra {nome}.",
+    "✨ A presença de {nome} ecoa na eternidade.",
+    "📖 {nome} foi gravado no conhecimento da guilda.",
+    "🜂 O Pilar reconhece {nome}.",
+    "🔮 Registro confirmado: {nome}.",
+    "📚 O saber eterno agora guarda {nome}.",
+]
+
+def resposta(nome):
+    return random.choice(frases).format(nome=nome)
+
+# =========================
+# DETECTOR DE PERFIL
+# =========================
+
+def extrair_nome(texto):
+    match = re.search(r"\d+\s+(.+)", texto)
+    if match:
+        nome = match.group(1)
+        nome = re.split(r"\n|Classe:", nome)[0]
+        return nome.strip()
+    return None
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not update.message:
-            return
+    if update.effective_chat.id != CHAT_ID_ORIGEM:
+        return
 
-        if update.effective_chat.id != GRUPO_ORIGEM:
-            return
+    if update.message.message_thread_id != TOPICO_PRESENCA:
+        return
 
-        if update.message.message_thread_id != TOPICO_PRESENCA:
-            return
+    texto = update.message.text or ""
+    nome = extrair_nome(texto)
 
-        texto = update.message.text or update.message.caption or ""
-        print("\n📩 NOVA MENSAGEM")
-        print("DEBUG TEXTO:", texto)
+    if not nome:
+        return
 
-        nome = extrair_nome(texto)
+    registrar_membro(nome)
+    salvar_presenca(nome)
 
-        if not nome:
-            print("❌ Nome não detectado")
-            return
+    await update.message.reply_text(resposta(nome))
 
-        print("✅ NOME:", nome)
+    await atualizar_lista(context.bot)
 
-        if salvar_presenca(nome):
+# =========================
+# FECHAMENTO 23:59
+# =========================
 
-            # 🔥 confirmação
-            try:
-                confirmacao = gerar_confirmacao(nome)
-                await update.message.reply_text(confirmacao)
-            except Exception as e:
-                print("❌ ERRO AO RESPONDER:", e)
+async def fechar_dia(bot):
+    texto = "📊 RELATÓRIO FINAL DO DIA\n\n"
+    texto += gerar_lista()
 
-            # 🔥 envio liderança
-            try:
-                await context.bot.send_message(
-                    chat_id=GRUPO_DESTINO,
-                    message_thread_id=TOPICO_LISTA,
-                    text=f"✅ Presença: {nome}"
-                )
-            except Exception as e:
-                print("❌ ERRO AO ENVIAR PRA LIDERANÇA:", e)
+    await bot.send_message(
+        chat_id=CHAT_ID_LIDER,
+        message_thread_id=TOPICO_LISTA,
+        text=texto
+    )
 
-    except Exception as e:
-        print("❌ ERRO GERAL:", e)
+    # limpa presenças do dia
+    cur = conn.cursor()
+    cur.execute("DELETE FROM presencas WHERE data=%s", (date.today(),))
 
-# ================== MAIN ==================
+    # reseta lista
+    set_lista_msg_id(None)
 
-def main():
-    print("🚀 Bot rodando...")
+async def scheduler(app):
+    while True:
+        agora = datetime.now()
+        if agora.hour == 23 and agora.minute == 59:
+            await fechar_dia(app.bot)
+            await asyncio.sleep(60)
+        await asyncio.sleep(30)
 
+# =========================
+# MAIN
+# =========================
+
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.ALL, detectar))
-    app.run_polling()
+
+    app.add_handler(MessageHandler(filters.TEXT, detectar))
+
+    asyncio.create_task(scheduler(app))
+
+    print("🚀 Bot rodando...")
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
