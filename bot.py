@@ -1,211 +1,208 @@
 import os
+import re
 import psycopg2
-from datetime import datetime, date
+from datetime import datetime
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
 
 TOKEN = os.getenv("TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
 
-GRUPO_ID = -1003792787717
+# IDs
+GRUPO_PRESENCA = -1003792787717
 TOPICO_PRESENCA = 16325
 
 GRUPO_LIDERANCA = -1003806440152
-TOPICO_PAINEL = 116
 
-conn = psycopg2.connect(DATABASE_URL)
-
-
-# ================= UTIL =================
-
-def limpar_nome(nome):
-    return nome.replace("[LG]", "").strip().upper()
+# conexão banco
+conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+cur = conn.cursor()
 
 
-def extrair_nome(texto):
-    for linha in texto.split("\n"):
-        if "📜" in linha:
-            partes = linha.split()
-            for i, p in enumerate(partes):
-                if p.isdigit():
-                    return limpar_nome(" ".join(partes[i + 1:]))
-    return None
-
-
-# ================= BANCO =================
+# =========================
+# BANCO
+# =========================
 
 def registrar_membro(nome):
-    cur = conn.cursor()
-    cur.execute("INSERT INTO membros VALUES (%s) ON CONFLICT DO NOTHING", (nome,))
-    conn.commit()
+    try:
+        cur.execute(
+            "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
+            (nome,)
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print("ERRO registrar_membro:", e)
 
 
 def salvar_presenca(nome):
-    hoje = date.today()
-    cur = conn.cursor()
-
-    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje))
-    if cur.fetchone():
-        return False
-
-    cur.execute("INSERT INTO presencas VALUES (%s,%s)", (nome, hoje))
-    conn.commit()
-    return True
-
-
-# ================= PAINEL =================
-
-def gerar_texto_painel():
-    hoje = date.today()
-    cur = conn.cursor()
-
-    cur.execute("SELECT nome FROM membros")
-    membros = [m[0] for m in cur.fetchall()]
-
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
-    presentes = [p[0] for p in cur.fetchall()]
-
-    faltantes = sorted(set(membros) - set(presentes))
-    presentes = sorted(presentes)
-
-    texto = f"📋 PRESENÇA - {hoje.strftime('%d/%m')}\n\n"
-
-    texto += "🟢 Presentes:\n"
-    texto += "\n".join([f"✅ {n}" for n in presentes]) or "Ninguém ainda"
-
-    texto += "\n\n🔴 Ausentes:\n"
-    texto += "\n".join([f"❌ {n}" for n in faltantes]) or "Nenhum"
-
-    texto += f"\n\n📊 {len(presentes)}/{len(membros)}"
-
-    return texto
-
-
-async def atualizar_painel(app):
-    hoje = date.today()
-    cur = conn.cursor()
-
-    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje,))
-    result = cur.fetchone()
-
-    if not result:
-        return
-
-    message_id = result[0]
-
-    texto = gerar_texto_painel()
-
-    await app.bot.edit_message_text(
-        chat_id=GRUPO_LIDERANCA,
-        message_id=message_id,
-        text=texto,
-        message_thread_id=TOPICO_PAINEL
-    )
-
-
-async def criar_painel(app):
-    hoje = date.today()
-    texto = gerar_texto_painel()
-
-    msg = await app.bot.send_message(
-        chat_id=GRUPO_LIDERANCA,
-        text=texto,
-        message_thread_id=TOPICO_PAINEL
-    )
-
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO painel VALUES (%s,%s) ON CONFLICT DO NOTHING",
-        (hoje, msg.message_id)
-    )
-    conn.commit()
-
-
-# ================= FALTAS =================
-
-def marcar_faltas():
-    hoje = date.today()
-    cur = conn.cursor()
-
-    cur.execute("SELECT nome FROM membros")
-    membros = [m[0] for m in cur.fetchall()]
-
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
-    presentes = [p[0] for p in cur.fetchall()]
-
-    faltantes = set(membros) - set(presentes)
-
-    for nome in faltantes:
+    hoje = datetime.now().date()
+    try:
         cur.execute(
-            "INSERT INTO faltas VALUES (%s,%s) ON CONFLICT DO NOTHING",
+            "INSERT INTO presencas (nome, data) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             (nome, hoje)
         )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print("ERRO salvar_presenca:", e)
+        return False
 
-    conn.commit()
+
+# =========================
+# FILTRO DE PERFIL
+# =========================
+
+def eh_perfil(texto: str):
+    return (
+        "Classe:" in texto and
+        "Lv" in texto and
+        "HP:" in texto
+    )
 
 
-# ================= DETECÇÃO =================
+# =========================
+# EXTRAIR NOME (ROBUSTO)
+# =========================
+
+def extrair_nome(texto: str):
+    try:
+        linhas = texto.split("\n")[0]
+
+        # remove emojis iniciais
+        linhas = re.sub(r"^[^\w\[]+", "", linhas)
+
+        # remove nível (ex: 37)
+        linhas = re.sub(r"^\d+\s*", "", linhas)
+
+        # remove classe emoji tipo 🏹 🛡️ 💫
+        linhas = re.sub(r"[^\w\s\[\],]", "", linhas)
+
+        # remove "Classe" se colado
+        linhas = linhas.split("Classe")[0]
+
+        nome = linhas.strip()
+
+        # remove prefixos tipo [LG]
+        nome = re.sub(r"\[.*?\]\s*", "", nome)
+
+        return nome.upper()
+    except:
+        return None
+
+
+# =========================
+# DETECTOR DE MENSAGEM
+# =========================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg:
+
+    if not msg or not msg.text:
         return
 
-    if msg.chat.id != GRUPO_ID:
+    # 🔥 FILTRO DE GRUPO
+    if msg.chat_id != GRUPO_PRESENCA:
         return
 
+    # 🔥 FILTRO DE TÓPICO
     if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
-    texto = msg.text or msg.caption
-    if not texto:
+    texto = msg.text
+
+    print("🔥 CHEGOU MENSAGEM")
+
+    # 🔒 FILTRO DE PERFIL (ESSENCIAL)
+    if not eh_perfil(texto):
+        print("❌ Ignorado (não é perfil)")
         return
 
     nome = extrair_nome(texto)
+
     if not nome:
+        print("❌ Não encontrou nome")
         return
+
+    print(f"✅ Nome: {nome}")
 
     registrar_membro(nome)
 
     if salvar_presenca(nome):
         await msg.reply_text(f"✅ Presença: {nome}")
-        await atualizar_painel(context.application)
+    else:
+        print("⚠️ Já registrado hoje")
 
 
-# ================= MAIN =================
+# =========================
+# COMANDO PRESENÇA
+# =========================
+
+async def presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != GRUPO_LIDERANCA:
+        return
+
+    hoje = datetime.now().date()
+
+    cur.execute("SELECT nome FROM presencas WHERE data = %s ORDER BY nome", (hoje,))
+    presentes = [r[0] for r in cur.fetchall()]
+
+    if not presentes:
+        await update.message.reply_text("📭 Ninguém marcou presença hoje.")
+        return
+
+    texto = "📋 Presença de hoje:\n\n"
+    texto += "\n".join([f"✅ {n}" for n in presentes])
+
+    await update.message.reply_text(texto)
+
+
+# =========================
+# COMANDO MENSAL
+# =========================
+
+async def mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != GRUPO_LIDERANCA:
+        return
+
+    mes = datetime.now().month
+    ano = datetime.now().year
+
+    cur.execute("""
+        SELECT nome, COUNT(*) 
+        FROM presencas 
+        WHERE EXTRACT(MONTH FROM data) = %s
+        AND EXTRACT(YEAR FROM data) = %s
+        GROUP BY nome
+        ORDER BY COUNT(*) DESC
+    """, (mes, ano))
+
+    dados = cur.fetchall()
+
+    if not dados:
+        await update.message.reply_text("📭 Sem dados no mês.")
+        return
+
+    texto = "📊 Presença mensal:\n\n"
+
+    for nome, total in dados:
+        texto += f"👤 {nome} → {total} dias\n"
+
+    await update.message.reply_text(texto)
+
+
+# =========================
+# MAIN
+# =========================
 
 def main():
+    print("🚀 Bot presença inteligente rodando...")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.ALL, detectar))
-
-    scheduler = AsyncIOScheduler()
-
-    # criar painel 00:00
-    scheduler.add_job(
-        lambda: app.create_task(criar_painel(app)),
-        "cron",
-        hour=0,
-        minute=0
-    )
-
-    # finalizar dia 23:59
-    scheduler.add_job(
-        marcar_faltas,
-        "cron",
-        hour=23,
-        minute=59
-    )
-
-    async def start_scheduler(app):
-        scheduler.start()
-        await criar_painel(app)
-        print("🧠 Scheduler + painel iniciado")
-
-    app.post_init = start_scheduler
-
-    print("🚀 Bot com painel profissional rodando...")
+    app.add_handler(MessageHandler(filters.TEXT, detectar))
+    app.add_handler(CommandHandler("presenca", presenca))
+    app.add_handler(CommandHandler("mensal", mensal))
 
     app.run_polling()
 
