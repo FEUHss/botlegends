@@ -1,4 +1,6 @@
 import os
+import psycopg2
+from datetime import datetime
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -7,142 +9,118 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ================= CONFIG =================
 TOKEN = os.getenv("TOKEN")
-
-if not TOKEN:
-    raise ValueError("❌ TOKEN não encontrado no Railway")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
 
-# Lista em memória (temporária)
-presencas = set()
-# ==========================================
+# ✅ SEU GRUPO DE LIDERANÇA
+GRUPO_LIDERANCA = -1003806440152
+
+conn = psycopg2.connect(DATABASE_URL)
 
 
-# 🔹 LIMPAR NOME
+# ================= FUNÇÕES =================
+
 def limpar_nome(nome):
-    return (
-        nome.replace("[LG]", "")
-        .replace("*", "")
-        .replace("_", "")
-        .replace("`", "")
-        .strip()
-        .upper()
-    )
+    return nome.replace("[LG]", "").strip().upper()
 
 
-# 🔹 EXTRAIR NOME
 def extrair_nome(texto):
-    linhas = texto.split("\n")
-
-    for linha in linhas:
+    for linha in texto.split("\n"):
         if "📜" in linha:
             partes = linha.split()
-
-            nome_partes = []
-            encontrou_nivel = False
-
-            for parte in partes:
-                if parte.isdigit():
-                    encontrou_nivel = True
-                    continue
-
-                if encontrou_nivel:
-                    nome_partes.append(parte)
-
-            if nome_partes:
-                nome = " ".join(nome_partes)
-                return limpar_nome(nome)
-
+            for i, p in enumerate(partes):
+                if p.isdigit():
+                    return limpar_nome(" ".join(partes[i + 1:]))
     return None
 
 
-# 🔥 HANDLER PRINCIPAL (IGNORA COMANDOS)
-async def detectar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
+def salvar_presenca(nome):
+    hoje = datetime.now().date()
+    cur = conn.cursor()
 
+    cur.execute(
+        "SELECT 1 FROM presencas WHERE nome=%s AND data=%s",
+        (nome, hoje),
+    )
+
+    if cur.fetchone():
+        return False
+
+    cur.execute(
+        "INSERT INTO presencas (nome, data) VALUES (%s, %s)",
+        (nome, hoje),
+    )
+    conn.commit()
+    return True
+
+
+# ================= HANDLER =================
+
+async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
     if not msg:
         return
 
-    # ❗ IGNORA COMANDOS
+    # ignora comandos
     if msg.text and msg.text.startswith("/"):
         return
 
-    chat_id = msg.chat.id
-    thread_id = msg.message_thread_id
-
-    print("\n🔥 CHEGOU MENSAGEM")
-    print("CHAT:", chat_id)
-    print("THREAD:", thread_id)
-
-    # 🔒 FILTRO GRUPO + TÓPICO
-    if chat_id == GRUPO_ID and thread_id != TOPICO_PRESENCA:
+    # filtra grupo + tópico
+    if msg.chat.id == GRUPO_ID and msg.message_thread_id != TOPICO_PRESENCA:
         return
 
     texto = msg.text or msg.caption
-
     if not texto:
-        print("❌ Sem texto")
         return
 
     nome = extrair_nome(texto)
-
     if not nome:
-        print("❌ Não encontrou nome")
         return
 
-    print("✅ Nome:", nome)
-
-    # Salva presença
-    presencas.add(nome)
-
-    await msg.reply_text(f"✅ Presença registrada: {nome}")
+    if salvar_presenca(nome):
+        await msg.reply_text(f"✅ Presença: {nome}")
 
 
-# 🔹 COMANDO START
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot de presença ativo!")
+# ================= COMANDOS =================
 
-
-# 🔥 COMANDO /PRESENCA (AGORA FUNCIONA)
-async def ver_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not presencas:
-        await update.message.reply_text("📋 Ninguém marcou presença ainda.")
+async def presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id != GRUPO_LIDERANCA:
         return
 
-    lista = "\n".join([f"✅ {nome}" for nome in sorted(presencas)])
+    hoje = datetime.now().date()
+    cur = conn.cursor()
 
-    texto = f"📋 Presenças do dia:\n\n{lista}"
+    cur.execute(
+        "SELECT nome FROM presencas WHERE data=%s ORDER BY nome",
+        (hoje,),
+    )
+
+    dados = cur.fetchall()
+
+    if not dados:
+        await update.message.reply_text("📋 Ninguém marcou presença hoje.")
+        return
+
+    texto = "📋 Presença de hoje:\n\n"
+    texto += "\n".join([f"✅ {n[0]}" for n in dados])
 
     await update.message.reply_text(texto)
 
 
-# 🚀 MAIN
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+async def mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id != GRUPO_LIDERANCA:
+        return
 
-    # 🔥 COMANDOS PRIMEIRO
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("presenca", ver_presenca))
+    cur = conn.cursor()
 
-    # 🔥 MENSAGENS DEPOIS
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT | filters.PHOTO | filters.CaptionRegex(".*"),
-            detectar_presenca,
-        )
-    )
-
-    print("🚀 Bot presença inteligente rodando...")
-
-    app.run_polling(
-        drop_pending_updates=True,
-        close_loop=False,
-    )
-
-
-if __name__ == "__main__":
-    main()
+    cur.execute(
+        """
+        SELECT nome, COUNT(*) 
+        FROM presencas
+        WHERE date
