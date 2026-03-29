@@ -16,6 +16,9 @@ if not TOKEN:
 
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
+
+# Lista em memória (temporária)
+presencas = set()
 # ==========================================
 
 
@@ -31,7 +34,7 @@ def limpar_nome(nome):
     )
 
 
-# 🔹 EXTRAIR NOME (VERSÃO FINAL INTELIGENTE)
+# 🔹 EXTRAIR NOME
 def extrair_nome(texto):
     linhas = texto.split("\n")
 
@@ -43,12 +46,10 @@ def extrair_nome(texto):
             encontrou_nivel = False
 
             for parte in partes:
-                # Detecta nível (número)
                 if parte.isdigit():
                     encontrou_nivel = True
                     continue
 
-                # Depois do nível = nome
                 if encontrou_nivel:
                     nome_partes.append(parte)
 
@@ -59,11 +60,15 @@ def extrair_nome(texto):
     return None
 
 
-# 🔥 HANDLER PRINCIPAL
+# 🔥 HANDLER PRINCIPAL (IGNORA COMANDOS)
 async def detectar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
     if not msg:
+        return
+
+    # ❗ IGNORA COMANDOS
+    if msg.text and msg.text.startswith("/"):
         return
 
     chat_id = msg.chat.id
@@ -73,20 +78,16 @@ async def detectar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("CHAT:", chat_id)
     print("THREAD:", thread_id)
 
-    # 🔒 FILTRO DO GRUPO + TÓPICO
+    # 🔒 FILTRO GRUPO + TÓPICO
     if chat_id == GRUPO_ID and thread_id != TOPICO_PRESENCA:
         return
 
-    # 📥 TEXTO OU CAPTION
     texto = msg.text or msg.caption
 
     if not texto:
         print("❌ Sem texto")
         return
 
-    print("📄 TEXTO:", texto[:100])
-
-    # 🔍 EXTRAIR NOME
     nome = extrair_nome(texto)
 
     if not nome:
@@ -95,7 +96,9 @@ async def detectar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     print("✅ Nome:", nome)
 
-    # ✅ RESPOSTA
+    # Salva presença
+    presencas.add(nome)
+
     await msg.reply_text(f"✅ Presença registrada: {nome}")
 
 
@@ -104,13 +107,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Bot de presença ativo!")
 
 
+# 🔥 COMANDO /PRESENCA (AGORA FUNCIONA)
+async def ver_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not presencas:
+        await update.message.reply_text("📋 Ninguém marcou presença ainda.")
+        return
+
+    lista = "\n".join([f"✅ {nome}" for nome in sorted(presencas)])
+
+    texto = f"📋 Presenças do dia:\n\n{lista}"
+
+    await update.message.reply_text(texto)
+
+
 # 🚀 MAIN
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # 🔥 COMANDOS PRIMEIRO
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("presenca", ver_presenca))
 
-    # 🔥 HANDLER CORRETO
+    # 🔥 MENSAGENS DEPOIS
     app.add_handler(
         MessageHandler(
             filters.TEXT | filters.PHOTO | filters.CaptionRegex(".*"),
@@ -128,4 +146,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
