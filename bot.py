@@ -1,13 +1,19 @@
 import os
 import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    CommandHandler,
+    ContextTypes,
+    filters,
+)
 
 # ================= CONFIG =================
 TOKEN = os.getenv("TOKEN")
 
 if not TOKEN:
-    raise ValueError("❌ TOKEN não encontrado nas variáveis do Railway")
+    raise ValueError("❌ TOKEN não encontrado no Railway")
 
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
@@ -29,7 +35,7 @@ def limpar_nome(nome):
     )
 
 
-# 🔹 EXTRAIR NOME DO PERFIL
+# 🔹 EXTRAIR NOME
 def extrair_nome(texto):
     try:
         linhas = texto.split("\n")
@@ -64,19 +70,19 @@ async def detectar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("CHAT:", chat_id)
     print("THREAD:", thread_id)
 
-    # 🔒 FILTRO DO GRUPO E TÓPICO
+    # 🔒 FILTRA GRUPO + TÓPICO
     if chat_id == GRUPO_ID:
         if thread_id != TOPICO_PRESENCA:
             return
 
-    # 📥 TEXTO OU CAPTION (imagem encaminhada usa caption!)
+    # 📥 TEXTO OU CAPTION
     texto = msg.text or msg.caption
 
     if not texto:
         print("❌ Sem texto")
         return
 
-    # 🔍 EXTRAIR NOME
+    # 🔍 EXTRAI NOME
     nome = extrair_nome(texto)
 
     if not nome:
@@ -85,7 +91,7 @@ async def detectar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     print("✅ NOME DETECTADO:", nome)
 
-    # ✅ RESPONDER
+    # ✅ RESPONDE
     await msg.reply_text(f"✅ Presença registrada: {nome}")
 
 
@@ -94,7 +100,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Bot de presença ativo!")
 
 
-# 🚀 MAIN
+# 🚀 MAIN (ANTI-CRASH)
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -103,7 +109,11 @@ def main():
 
     print("🚀 Bot presença inteligente rodando...")
 
-    app.run_polling()
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+        close_loop=False,
+    )
 
 
 if __name__ == "__main__":
