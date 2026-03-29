@@ -35,7 +35,7 @@ def limpar_nome(nome):
     )
 
 
-# 🔹 EXTRAIR NOME
+# 🔹 EXTRAIR NOME (VERSÃO MELHORADA)
 def extrair_nome(texto):
     try:
         linhas = texto.split("\n")
@@ -49,72 +49,4 @@ def extrair_nome(texto):
                         nome = " ".join(partes[i + 1:])
                         return limpar_nome(nome)
 
-        return None
-
-    except Exception as e:
-        print("Erro ao extrair nome:", e)
-        return None
-
-
-# 🔥 HANDLER PRINCIPAL
-async def detectar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-
-    if not msg:
         return
-
-    chat_id = msg.chat.id
-    thread_id = msg.message_thread_id
-
-    print("\n🔥 CHEGOU MENSAGEM")
-    print("CHAT:", chat_id)
-    print("THREAD:", thread_id)
-
-    # 🔒 FILTRA GRUPO + TÓPICO
-    if chat_id == GRUPO_ID:
-        if thread_id != TOPICO_PRESENCA:
-            return
-
-    # 📥 TEXTO OU CAPTION
-    texto = msg.text or msg.caption
-
-    if not texto:
-        print("❌ Sem texto")
-        return
-
-    # 🔍 EXTRAI NOME
-    nome = extrair_nome(texto)
-
-    if not nome:
-        print("❌ Nome não encontrado")
-        return
-
-    print("✅ NOME DETECTADO:", nome)
-
-    # ✅ RESPONDE
-    await msg.reply_text(f"✅ Presença registrada: {nome}")
-
-
-# 🔹 COMANDO START
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot de presença ativo!")
-
-
-# 🚀 MAIN (ANTI-CRASH)
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.ALL, detectar_presenca))
-
-    print("🚀 Bot presença inteligente rodando...")
-
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES,
-        close_loop=False,
-    )
-
-
-if __name__ == "__main__":
-    main()
