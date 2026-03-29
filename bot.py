@@ -66,12 +66,15 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
+    # grupo correto
     if msg.chat.id != GRUPO_ID:
         return
 
+    # tópico correto
     if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
+    # ignora comandos
     if msg.text and msg.text.startswith("/"):
         return
 
@@ -174,6 +177,8 @@ async def relatorio_mensal_job(app):
     )
 
 
+# ================= RESET =================
+
 def reset_diario():
     print("🕛 Reset diário executado")
 
@@ -183,10 +188,11 @@ def reset_diario():
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # comandos
     app.add_handler(CommandHandler("presenca", presenca))
     app.add_handler(CommandHandler("mensal", mensal))
 
-    # 🔥 CORREÇÃO AQUI
+    # handler (corrigido)
     app.add_handler(MessageHandler(filters.ALL, detectar))
 
     scheduler = AsyncIOScheduler()
@@ -201,7 +207,12 @@ def main():
         minute=59,
     )
 
-    scheduler.start()
+    # 🔥 CORREÇÃO DO LOOP
+    async def start_scheduler(app):
+        scheduler.start()
+        print("🧠 Scheduler iniciado")
+
+    app.post_init = start_scheduler
 
     print("🚀 Bot presença FINAL rodando...")
 
