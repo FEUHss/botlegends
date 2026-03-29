@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filte
 
 # ================= CONFIG =================
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # 📥 GRUPO DO CLÃ (onde lê)
