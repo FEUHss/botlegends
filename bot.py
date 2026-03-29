@@ -6,6 +6,8 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
+print("🔥 INICIANDO BOT...")
+
 # ================== CONFIG ==================
 
 TOKEN = os.getenv("TOKEN")
@@ -31,7 +33,10 @@ CREATE TABLE IF NOT EXISTS presencas (
 """)
 conn.commit()
 
-# ================== FRASES DO PILAR ==================
+# ================== UTIL ==================
+
+def limpar_nome(nome):
+    return re.sub(r"[^\w\s]", "", nome).strip()
 
 def gerar_confirmacao(nome):
     frases = [
@@ -45,28 +50,24 @@ def gerar_confirmacao(nome):
     ]
     return random.choice(frases)
 
-# ================== FUNÇÕES ==================
-
 def extrair_nome(texto):
     if not texto:
         return None
 
-    # pega padrões comuns do Teletofus
-    padrao = re.search(r"\d+\s+LG\s*([A-Za-zÀ-ÿ0-9_ ]+)", texto)
-    if padrao:
-        return padrao.group(1).strip()
+    match = re.search(r"\d+\s+\[LG\]\s*([^\n]+)", texto)
+    if match:
+        nome = match.group(1).strip()
+        return limpar_nome(nome)
 
-    # fallback mais flexível
-    padrao2 = re.search(r"\d+\s+([A-Za-zÀ-ÿ0-9_ ]+)", texto)
-    if padrao2:
-        return padrao2.group(1).strip()
+    match2 = re.search(r"\d+\s+([^\n]+)", texto)
+    if match2:
+        nome = match2.group(1).strip()
+        return limpar_nome(nome)
 
     return None
 
-
 def salvar_presenca(nome):
     hoje = datetime.utcnow().date()
-
     try:
         cur.execute(
             "INSERT INTO presencas (nome, data) VALUES (%s, %s) ON CONFLICT DO NOTHING",
@@ -76,22 +77,64 @@ def salvar_presenca(nome):
         return True
     except Exception as e:
         conn.rollback()
-        print("ERRO AO SALVAR:", e)
+        print("❌ ERRO BANCO:", e)
         return False
-
 
 # ================== HANDLER ==================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
+    try:
+        if not update.message:
+            return
 
-    # 🔒 filtra grupo correto
-    if update.effective_chat.id != GRUPO_ORIGEM:
-        return
+        if update.effective_chat.id != GRUPO_ORIGEM:
+            return
 
-    # 🔒 filtra tópico correto
-    if update.message.message_thread_id != TOPICO_PRESENCA:
-        return
+        if update.message.message_thread_id != TOPICO_PRESENCA:
+            return
 
-    texto = update.message.text or update.message.caption or ""
+        texto = update.message.text or update.message.caption or ""
+        print("\n📩 NOVA MENSAGEM")
+        print("DEBUG TEXTO:", texto)
+
+        nome = extrair_nome(texto)
+
+        if not nome:
+            print("❌ Nome não detectado")
+            return
+
+        print("✅ NOME:", nome)
+
+        if salvar_presenca(nome):
+
+            # 🔥 confirmação
+            try:
+                confirmacao = gerar_confirmacao(nome)
+                await update.message.reply_text(confirmacao)
+            except Exception as e:
+                print("❌ ERRO AO RESPONDER:", e)
+
+            # 🔥 envio liderança
+            try:
+                await context.bot.send_message(
+                    chat_id=GRUPO_DESTINO,
+                    message_thread_id=TOPICO_LISTA,
+                    text=f"✅ Presença: {nome}"
+                )
+            except Exception as e:
+                print("❌ ERRO AO ENVIAR PRA LIDERANÇA:", e)
+
+    except Exception as e:
+        print("❌ ERRO GERAL:", e)
+
+# ================== MAIN ==================
+
+def main():
+    print("🚀 Bot rodando...")
+
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(MessageHandler(filters.ALL, detectar))
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
