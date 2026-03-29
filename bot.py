@@ -5,9 +5,9 @@ import os
 
 TOKEN = os.getenv("TOKEN")
 
-GRUPO_ID = -1003792787717
+GRUPO_ID = -1003792787717  # grupo da guilda
 
-# Lista base (pode crescer automaticamente)
+# Lista base de membros
 MEMBROS = set([
     "ARCHANGEL",
     "CHURO",
@@ -36,19 +36,19 @@ presencas = set()
 def limpar_nome(nome):
     nome = nome.upper()
 
-    # remove [LG]
+    # remove [TAG]
     nome = re.sub(r"\[.*?\]", "", nome)
 
-    # remove emojis e símbolos
+    # remove emojis/símbolos
     nome = re.sub(r"[^\w\s,]", "", nome)
 
-    # remove múltiplos espaços
+    # remove espaços extras
     nome = re.sub(r"\s+", " ", nome).strip()
 
     return nome
 
 # =========================
-# EXTRAIR NOME DO PERFIL
+# EXTRAIR NOME
 # =========================
 def extrair_nome(texto):
     try:
@@ -61,7 +61,7 @@ def extrair_nome(texto):
         return None
 
 # =========================
-# CAPTURA
+# CAPTURA DE PERFIL (SÓ GRUPO)
 # =========================
 async def capturar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -69,11 +69,13 @@ async def capturar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not msg.text:
         return
 
+    # 🔒 Só funciona no grupo
     if msg.chat.id != GRUPO_ID:
         return
 
     texto = msg.text
 
+    # garante que é perfil
     if "Classe:" not in texto:
         return
 
@@ -83,11 +85,11 @@ async def capturar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if nome:
         presencas.add(nome)
-        MEMBROS.add(nome)  # adiciona automaticamente novos players
-        print(f"✅ Presença: {nome}")
+        MEMBROS.add(nome)  # adiciona novos automaticamente
+        print(f"✅ Presença registrada: {nome}")
 
 # =========================
-# COMANDO /presenca
+# COMANDO /presenca (FUNCIONA EM QUALQUER LUGAR)
 # =========================
 async def ver_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resposta = "📋 PRESENÇA DO DIA\n\n"
@@ -115,7 +117,10 @@ def main():
 
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # captura mensagens (grupo)
     app.add_handler(MessageHandler(filters.TEXT, capturar))
+
+    # comandos (funcionam em qualquer chat)
     app.add_handler(CommandHandler("presenca", ver_presenca))
     app.add_handler(CommandHandler("reset", reset))
 
