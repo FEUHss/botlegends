@@ -22,7 +22,7 @@ GRUPO_LIDERANCA = -1003806440152
 conn = psycopg2.connect(DATABASE_URL)
 
 
-# ================= FUNÇÕES =================
+# ================= UTIL =================
 
 def limpar_nome(nome):
     return nome.replace("[LG]", "").strip().upper()
@@ -36,6 +36,15 @@ def extrair_nome(texto):
                 if p.isdigit():
                     return limpar_nome(" ".join(partes[i + 1:]))
     return None
+
+
+def registrar_membro(nome):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
+        (nome,),
+    )
+    conn.commit()
 
 
 def salvar_presenca(nome):
@@ -66,15 +75,12 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # grupo correto
     if msg.chat.id != GRUPO_ID:
         return
 
-    # tópico correto
     if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
-    # ignora comandos
     if msg.text and msg.text.startswith("/"):
         return
 
@@ -85,6 +91,8 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = extrair_nome(texto)
     if not nome:
         return
+
+    registrar_membro(nome)
 
     if salvar_presenca(nome):
         await msg.reply_text(f"✅ Presença: {nome}")
@@ -99,11 +107,7 @@ async def presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hoje = datetime.now().date()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT nome FROM presencas WHERE data=%s ORDER BY nome",
-        (hoje,),
-    )
-
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
     dados = cur.fetchall()
 
     if not dados:
@@ -122,65 +126,79 @@ async def mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cur = conn.cursor()
 
-    cur.execute(
-        """
-        SELECT nome, COUNT(*) 
-        FROM presencas
-        WHERE date_trunc('month', data) = date_trunc('month', CURRENT_DATE)
-        GROUP BY nome
-        ORDER BY nome
-        """
-    )
+    cur.execute("""
+    SELECT m.nome,
+           COUNT(p.data) as presencas,
+           COUNT(f.data) as faltas
+    FROM membros m
+    LEFT JOIN presencas p ON m.nome = p.nome
+        AND date_trunc('month', p.data) = date_trunc('month', CURRENT_DATE)
+    LEFT JOIN faltas f ON m.nome = f.nome
+        AND date_trunc('month', f.data) = date_trunc('month', CURRENT_DATE)
+    GROUP BY m.nome
+    ORDER BY m.nome
+    """)
 
     dados = cur.fetchall()
 
-    if not dados:
-        await update.message.reply_text("📊 Sem dados esse mês.")
-        return
-
     texto = "📊 Relatório mensal:\n\n"
 
-    for nome, pres in dados:
-        texto += f"{nome}: {pres} presenças\n"
+    for nome, pres, falt in dados:
+        texto += f"{nome}: ✅ {pres} | ❌ {falt}\n"
 
     await update.message.reply_text(texto)
 
 
-# ================= RELATÓRIO AUTOMÁTICO =================
+# ================= FALTAS AUTOMÁTICAS =================
+
+def marcar_faltas():
+    hoje = datetime.now().date()
+    cur = conn.cursor()
+
+    cur.execute("SELECT nome FROM membros")
+    membros = [m[0] for m in cur.fetchall()]
+
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
+    presentes = [p[0] for p in cur.fetchall()]
+
+    faltantes = set(membros) - set(presentes)
+
+    for nome in faltantes:
+        cur.execute(
+            "INSERT INTO faltas (nome, data) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (nome, hoje),
+        )
+
+    conn.commit()
+    print(f"🚫 Faltas registradas: {len(faltantes)}")
+
+
+# ================= RELATÓRIO =================
 
 async def relatorio_mensal_job(app):
     cur = conn.cursor()
 
-    cur.execute(
-        """
-        SELECT nome, COUNT(*) 
-        FROM presencas
-        WHERE date_trunc('month', data) = date_trunc('month', CURRENT_DATE)
-        GROUP BY nome
-        ORDER BY nome
-        """
-    )
+    cur.execute("""
+    SELECT m.nome,
+           COUNT(p.data),
+           COUNT(f.data)
+    FROM membros m
+    LEFT JOIN presencas p ON m.nome = p.nome
+        AND date_trunc('month', p.data) = date_trunc('month', CURRENT_DATE)
+    LEFT JOIN faltas f ON m.nome = f.nome
+        AND date_trunc('month', f.data) = date_trunc('month', CURRENT_DATE)
+    GROUP BY m.nome
+    ORDER BY m.nome
+    """)
 
     dados = cur.fetchall()
 
-    if not dados:
-        return
-
     texto = "🏆 RELATÓRIO FINAL DO MÊS:\n\n"
 
-    for nome, pres in dados:
-        texto += f"{nome}: {pres} presenças\n"
+    for nome, pres, falt in dados:
+        texto += f"{nome}: ✅ {pres} | ❌ {falt}\n"
 
-    await app.bot.send_message(
-        chat_id=GRUPO_LIDERANCA,
-        text=texto
-    )
-
-
-# ================= RESET =================
-
-def reset_diario():
-    print("🕛 Reset diário executado")
+    await app.bot.send_message(GRUPO_LIDERANCA, texto)
 
 
 # ================= MAIN =================
@@ -188,17 +206,17 @@ def reset_diario():
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # comandos
     app.add_handler(CommandHandler("presenca", presenca))
     app.add_handler(CommandHandler("mensal", mensal))
 
-    # handler (corrigido)
     app.add_handler(MessageHandler(filters.ALL, detectar))
 
     scheduler = AsyncIOScheduler()
 
-    scheduler.add_job(reset_diario, "cron", hour=0, minute=0)
+    # 🔥 FALTAS AUTOMÁTICAS
+    scheduler.add_job(marcar_faltas, "cron", hour=23, minute=59)
 
+    # 🔥 RELATÓRIO MENSAL
     scheduler.add_job(
         lambda: app.create_task(relatorio_mensal_job(app)),
         "cron",
@@ -207,17 +225,17 @@ def main():
         minute=59,
     )
 
-    # 🔥 CORREÇÃO DO LOOP
     async def start_scheduler(app):
         scheduler.start()
         print("🧠 Scheduler iniciado")
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot presença FINAL rodando...")
+    print("🚀 Bot com faltas automáticas rodando...")
 
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
+
