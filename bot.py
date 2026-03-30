@@ -20,7 +20,6 @@ conn = psycopg2.connect(DATABASE_URL)
 
 tz = pytz.timezone("America/Sao_Paulo")
 
-# 🔥 cache para evitar falha de atualização
 ultimo_texto_painel = {}
 
 
@@ -116,6 +115,7 @@ def gerar_texto_painel():
     return texto
 
 
+# 🔥 CORREÇÃO 3
 async def atualizar_painel(app):
     hoje_ = hoje()
     cur = conn.cursor()
@@ -130,27 +130,17 @@ async def atualizar_painel(app):
     message_id = result[0]
     texto = gerar_texto_painel()
 
-    global ultimo_texto_painel
-
-    # 🔥 força atualização (Telegram bug fix)
-    texto_forcado = texto + "\n"
-
     try:
-        if ultimo_texto_painel.get(hoje_) != texto:
-            await app.bot.edit_message_text(
-                chat_id=GRUPO_LIDERANCA,
-                message_id=message_id,
-                text=texto_forcado,
-                message_thread_id=TOPICO_PAINEL
-            )
-
-            ultimo_texto_painel[hoje_] = texto
-            print("🔄 Painel atualizado")
-        else:
-            print("⚠️ Texto igual, não atualizou")
+        await app.bot.edit_message_text(
+            chat_id=GRUPO_LIDERANCA,
+            message_id=message_id,
+            text=texto + f"\n\n🕒 Atualizado: {datetime.now(tz).strftime('%H:%M:%S')}",
+            message_thread_id=TOPICO_PAINEL
+        )
+        print("🔄 Painel atualizado FORÇADO")
 
     except Exception as e:
-        print("❌ Erro ao atualizar painel:", e)
+        print("❌ Erro REAL ao atualizar painel:", e)
 
 
 async def criar_painel(app):
@@ -199,14 +189,11 @@ async def fechar_e_novo_dia(app):
     print("🌙 Fechando dia...")
 
     marcar_faltas()
-
-    # 🔄 atualiza painel final do dia
     await atualizar_painel(app)
 
     import asyncio
     await asyncio.sleep(2)
 
-    # 🌅 cria novo painel
     await criar_painel(app)
 
     print("🌅 Novo painel criado")
@@ -234,6 +221,8 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not msg:
         return
+
+    print("THREAD:", msg.message_thread_id)  # 🔥 CORREÇÃO 2
 
     if msg.chat.id != GRUPO_ID:
         return
@@ -267,7 +256,9 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("lista", comando_lista))
-    app.add_handler(MessageHandler(filters.ALL, detectar))
+
+    # 🔥 CORREÇÃO 1
+    app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
     scheduler = AsyncIOScheduler(timezone=tz)
 
@@ -285,7 +276,7 @@ def main():
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot rodando (FINAL ABSOLUTO)...")
+    print("🚀 Bot rodando (FINAL DEBUG)...")
 
     app.run_polling(drop_pending_updates=True)
 
