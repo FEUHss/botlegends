@@ -2,6 +2,7 @@ import os
 import psycopg2
 import random
 import pytz
+import re
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
@@ -38,34 +39,53 @@ def extrair_nome(texto):
                 return limpar_nome(" ".join(partes[i + 1:]))
     return None
 
+# 🔥 PARSER PROFISSIONAL
 def extrair_status(texto):
     dados = {}
 
     for linha in texto.split("\n"):
 
+        # Classe
         if "Classe:" in linha:
-            dados["classe"] = linha.split(":")[1].strip()
+            try:
+                dados["classe"] = linha.split(":")[1].strip()
+            except:
+                pass
 
-        elif "Lv" in linha:
-            partes = linha.split()
-            for i, p in enumerate(partes):
-                if p == "Lv":
-                    dados["nivel"] = int(partes[i + 1])
+        # Nível
+        if "Lv" in linha:
+            match = re.search(r"Lv\s*(\d+)", linha)
+            if match:
+                dados["nivel"] = int(match.group(1))
 
-        elif "ATK" in linha:
-            partes = linha.replace("%", "").split()
-            dados["atk"] = float(partes[1])
-            dados["def"] = float(partes[3])
-            dados["crit"] = float(partes[5])
+        # ATK / DEF / CRIT
+        if "ATK" in linha:
+            numeros = re.findall(r"\d+\.?\d*", linha)
+            try:
+                if len(numeros) >= 3:
+                    dados["atk"] = float(numeros[0])
+                    dados["def"] = float(numeros[1])
+                    dados["crit"] = float(numeros[2])
+            except:
+                pass
 
-        elif "HP:" in linha:
-            dados["hp"] = int(linha.split()[1].split("/")[0])
+        # HP
+        if "HP:" in linha:
+            match = re.search(r"HP:\s*(\d+)", linha)
+            if match:
+                dados["hp"] = int(match.group(1))
 
-        elif "Gold:" in linha:
-            dados["gold"] = int(linha.split()[1])
+        # Gold
+        if "Gold:" in linha:
+            match = re.search(r"Gold:\s*(\d+)", linha)
+            if match:
+                dados["gold"] = int(match.group(1))
 
-        elif "Tofus:" in linha:
-            dados["tofus"] = int(linha.split()[1])
+        # Tofus
+        if "Tofus:" in linha:
+            match = re.search(r"Tofus:\s*(\d+)", linha)
+            if match:
+                dados["tofus"] = int(match.group(1))
 
     return dados
 
@@ -139,7 +159,7 @@ def gerar_rank(campo):
     cur.execute(f"""
         SELECT nome, {campo}
         FROM status
-        WHERE data=%s
+        WHERE data=%s AND {campo} IS NOT NULL
         ORDER BY {campo} DESC
         LIMIT 10
     """, (hoje(),))
@@ -194,14 +214,11 @@ async def atualizar_painel(app):
         await criar_painel(app)
         return
 
-    message_id = result[0]
-    texto = gerar_texto_painel()
-
     try:
         await app.bot.edit_message_text(
             chat_id=GRUPO_LIDERANCA,
-            message_id=message_id,
-            text=texto
+            message_id=result[0],
+            text=gerar_texto_painel()
         )
     except Exception as e:
         print("Erro painel:", e)
@@ -281,7 +298,6 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("lista", comando_lista))
-
     app.add_handler(CommandHandler("rank_atk", rank_atk))
     app.add_handler(CommandHandler("rank_def", rank_def))
     app.add_handler(CommandHandler("rank_crit", rank_crit))
@@ -294,7 +310,7 @@ def main():
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.start()
 
-    print("🚀 Bot com ranking rodando")
+    print("🚀 Bot com ranking rodando (ESTÁVEL)")
 
     app.run_polling(drop_pending_updates=True)
 
