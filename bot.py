@@ -20,9 +20,6 @@ conn = psycopg2.connect(DATABASE_URL)
 
 tz = pytz.timezone("America/Sao_Paulo")
 
-ultimo_texto_painel = {}
-
-
 # ================= DATA =================
 
 def hoje():
@@ -115,7 +112,6 @@ def gerar_texto_painel():
     return texto
 
 
-# 🔥 CORREÇÃO FINAL
 async def atualizar_painel(app):
     hoje_ = hoje()
     cur = conn.cursor()
@@ -124,7 +120,8 @@ async def atualizar_painel(app):
     result = cur.fetchone()
 
     if not result:
-        print("⚠️ Painel não encontrado")
+        print("⚠️ Painel não existe, criando...")
+        await criar_painel(app)
         return
 
     message_id = result[0]
@@ -141,6 +138,25 @@ async def atualizar_painel(app):
     except Exception as e:
         print("❌ Erro ao atualizar painel:", e)
 
+        if "message to edit not found" in str(e).lower():
+            print("♻️ Painel perdido, recriando...")
+
+            # recria painel
+            msg = await app.bot.send_message(
+                chat_id=GRUPO_LIDERANCA,
+                text=texto,
+                message_thread_id=TOPICO_PAINEL
+            )
+
+            # atualiza banco corretamente
+            cur.execute("""
+                INSERT INTO painel (data, message_id)
+                VALUES (%s, %s)
+                ON CONFLICT (data)
+                DO UPDATE SET message_id = EXCLUDED.message_id
+            """, (hoje_, msg.message_id))
+            conn.commit()
+
 
 async def criar_painel(app):
     hoje_ = hoje()
@@ -153,10 +169,12 @@ async def criar_painel(app):
     )
 
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO painel (data, message_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
-        (hoje_, msg.message_id)
-    )
+    cur.execute("""
+        INSERT INTO painel (data, message_id)
+        VALUES (%s, %s)
+        ON CONFLICT (data)
+        DO UPDATE SET message_id = EXCLUDED.message_id
+    """, (hoje_, msg.message_id))
     conn.commit()
 
 
@@ -273,7 +291,7 @@ def main():
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot rodando (FINAL PERFEITO)...")
+    print("🚀 Bot rodando (FINAL MASTER)...")
 
     app.run_polling(drop_pending_updates=True)
 
