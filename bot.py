@@ -141,6 +141,7 @@ async def atualizar_painel(app):
 
 
 async def criar_painel(app):
+    print("🆕 Criando novo painel...")
     hoje_ = hoje()
     texto = gerar_texto_painel()
 
@@ -187,6 +188,8 @@ def marcar_faltas():
 # ================= FECHAMENTO =================
 
 async def fechar_dia(app):
+    print("⏰ Rodando fechamento do dia...")
+
     hoje_ = hoje()
     cur = conn.cursor()
 
@@ -275,25 +278,27 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.ALL, detectar))
+    # 🔥 CORREÇÃO DO HANDLER
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, detectar))
     app.add_handler(CommandHandler("lista", comando_lista))
 
-    scheduler = AsyncIOScheduler()
+    # 🔥 TIMEZONE CORRIGIDO
+    scheduler = AsyncIOScheduler(timezone=tz)
 
-    # 🔒 fechamento do dia
     scheduler.add_job(
-        lambda: app.create_task(fechar_dia(app)),
+        fechar_dia,
         "cron",
         hour=23,
-        minute=59
+        minute=59,
+        args=[app]
     )
 
-    # 🆕 novo painel
     scheduler.add_job(
-        lambda: app.create_task(criar_painel(app)),
+        criar_painel,
         "cron",
         hour=0,
-        minute=0
+        minute=0,
+        args=[app]
     )
 
     async def start_scheduler(app):
