@@ -20,6 +20,9 @@ conn = psycopg2.connect(DATABASE_URL)
 
 tz = pytz.timezone("America/Sao_Paulo")
 
+# 🔥 cache para evitar falha de atualização
+ultimo_texto_painel = {}
+
 
 # ================= DATA =================
 
@@ -100,15 +103,15 @@ def gerar_texto_painel():
     faltantes = sorted(set(membros) - set(presentes))
     presentes = sorted(presentes)
 
-    texto = f"📋 PRESENÇA - {hoje_.strftime('%d/%m')}\n\n"
+    texto = f"📜 PRESENÇA DA GUILDA — {hoje_.strftime('%d/%m')}\n\n"
 
     texto += "🟢 Presentes:\n"
-    texto += "\n".join([f"✅ {n}" for n in presentes]) or "Ninguém ainda"
+    texto += "\n".join([f"✅ {n}" for n in presentes]) if presentes else "Ninguém ainda"
 
     texto += "\n\n🔴 Ausentes:\n"
-    texto += "\n".join([f"❌ {n}" for n in faltantes]) or "Nenhum"
+    texto += "\n".join([f"❌ {n}" for n in faltantes]) if faltantes else "Nenhum"
 
-    texto += f"\n\n📊 {len(presentes)}/{len(membros)}"
+    texto += f"\n\n📊 Total: {len(presentes)}/{len(membros)} membros"
 
     return texto
 
@@ -121,20 +124,33 @@ async def atualizar_painel(app):
     result = cur.fetchone()
 
     if not result:
+        print("⚠️ Painel não encontrado")
         return
 
     message_id = result[0]
     texto = gerar_texto_painel()
 
+    global ultimo_texto_painel
+
+    # 🔥 força atualização (Telegram bug fix)
+    texto_forcado = texto + "\n"
+
     try:
-        await app.bot.edit_message_text(
-            chat_id=GRUPO_LIDERANCA,
-            message_id=message_id,
-            text=texto,
-            message_thread_id=TOPICO_PAINEL
-        )
+        if ultimo_texto_painel.get(hoje_) != texto:
+            await app.bot.edit_message_text(
+                chat_id=GRUPO_LIDERANCA,
+                message_id=message_id,
+                text=texto_forcado,
+                message_thread_id=TOPICO_PAINEL
+            )
+
+            ultimo_texto_painel[hoje_] = texto
+            print("🔄 Painel atualizado")
+        else:
+            print("⚠️ Texto igual, não atualizou")
+
     except Exception as e:
-        print("Erro ao atualizar painel:", e)
+        print("❌ Erro ao atualizar painel:", e)
 
 
 async def criar_painel(app):
@@ -181,8 +197,18 @@ def marcar_faltas():
 
 async def fechar_e_novo_dia(app):
     print("🌙 Fechando dia...")
+
     marcar_faltas()
+
+    # 🔄 atualiza painel final do dia
+    await atualizar_painel(app)
+
+    import asyncio
+    await asyncio.sleep(2)
+
+    # 🌅 cria novo painel
     await criar_painel(app)
+
     print("🌅 Novo painel criado")
 
 
@@ -259,7 +285,7 @@ def main():
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot rodando (FINAL CORRIGIDO)...")
+    print("🚀 Bot rodando (FINAL ABSOLUTO)...")
 
     app.run_polling(drop_pending_updates=True)
 
