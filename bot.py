@@ -115,7 +115,7 @@ def gerar_texto_painel():
     return texto
 
 
-# 🔥 CORREÇÃO 3
+# 🔥 CORREÇÃO FINAL
 async def atualizar_painel(app):
     hoje_ = hoje()
     cur = conn.cursor()
@@ -134,13 +134,12 @@ async def atualizar_painel(app):
         await app.bot.edit_message_text(
             chat_id=GRUPO_LIDERANCA,
             message_id=message_id,
-            text=texto + f"\n\n🕒 Atualizado: {datetime.now(tz).strftime('%H:%M:%S')}",
-            message_thread_id=TOPICO_PAINEL
+            text=texto + f"\n\n🕒 Atualizado: {datetime.now(tz).strftime('%H:%M:%S')}"
         )
-        print("🔄 Painel atualizado FORÇADO")
+        print("🔄 Painel atualizado")
 
     except Exception as e:
-        print("❌ Erro REAL ao atualizar painel:", e)
+        print("❌ Erro ao atualizar painel:", e)
 
 
 async def criar_painel(app):
@@ -222,7 +221,7 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    print("THREAD:", msg.message_thread_id)  # 🔥 CORREÇÃO 2
+    print("THREAD:", msg.message_thread_id)
 
     if msg.chat.id != GRUPO_ID:
         return
@@ -256,8 +255,6 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("lista", comando_lista))
-
-    # 🔥 CORREÇÃO 1
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
     scheduler = AsyncIOScheduler(timezone=tz)
@@ -276,7 +273,7 @@ def main():
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot rodando (FINAL DEBUG)...")
+    print("🚀 Bot rodando (FINAL PERFEITO)...")
 
     app.run_polling(drop_pending_updates=True)
 
