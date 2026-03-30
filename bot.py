@@ -37,9 +37,10 @@ def extrair_nome(texto):
     for linha in texto.split("\n"):
         partes = linha.strip().split()
 
-        if len(partes) >= 2 and partes[0].isdigit():
-            nome = " ".join(partes[1:])
-            return limpar_nome(nome)
+        for i, p in enumerate(partes):
+            if p.isdigit():
+                nome = " ".join(partes[i + 1:])
+                return limpar_nome(nome)
 
     return None
 
@@ -61,7 +62,10 @@ def mensagem_pilar(nome):
 
 def registrar_membro(nome):
     cur = conn.cursor()
-    cur.execute("INSERT INTO membros VALUES (%s) ON CONFLICT DO NOTHING", (nome,))
+    cur.execute(
+        "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
+        (nome,)
+    )
     conn.commit()
 
 
@@ -73,7 +77,10 @@ def salvar_presenca(nome):
     if cur.fetchone():
         return False
 
-    cur.execute("INSERT INTO presencas VALUES (%s,%s)", (nome, hoje_))
+    cur.execute(
+        "INSERT INTO presencas (nome, data) VALUES (%s,%s)",
+        (nome, hoje_)
+    )
     conn.commit()
     return True
 
@@ -119,12 +126,15 @@ async def atualizar_painel(app):
     message_id = result[0]
     texto = gerar_texto_painel()
 
-    await app.bot.edit_message_text(
-        chat_id=GRUPO_LIDERANCA,
-        message_id=message_id,
-        text=texto,
-        message_thread_id=TOPICO_PAINEL
-    )
+    try:
+        await app.bot.edit_message_text(
+            chat_id=GRUPO_LIDERANCA,
+            message_id=message_id,
+            text=texto,
+            message_thread_id=TOPICO_PAINEL
+        )
+    except Exception as e:
+        print("Erro ao atualizar painel:", e)
 
 
 async def criar_painel(app):
@@ -139,7 +149,7 @@ async def criar_painel(app):
 
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO painel VALUES (%s,%s) ON CONFLICT DO NOTHING",
+        "INSERT INTO painel (data, message_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
         (hoje_, msg.message_id)
     )
     conn.commit()
@@ -161,7 +171,7 @@ def marcar_faltas():
 
     for nome in faltantes:
         cur.execute(
-            "INSERT INTO faltas VALUES (%s,%s) ON CONFLICT DO NOTHING",
+            "INSERT INTO faltas (nome, data) VALUES (%s,%s) ON CONFLICT DO NOTHING",
             (nome, hoje_)
         )
 
@@ -249,7 +259,7 @@ def main():
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot rodando (FINAL)...")
+    print("🚀 Bot rodando (FINAL CORRIGIDO)...")
 
     app.run_polling(drop_pending_updates=True)
 
