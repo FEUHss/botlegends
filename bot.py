@@ -1,7 +1,8 @@
 import os
 import psycopg2
 import random
-from datetime import datetime, date
+import pytz
+from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -16,6 +17,14 @@ GRUPO_LIDERANCA = -1003806440152
 TOPICO_PAINEL = 116
 
 conn = psycopg2.connect(DATABASE_URL)
+
+tz = pytz.timezone("America/Sao_Paulo")
+
+
+# ================= DATA =================
+
+def hoje():
+    return datetime.now(tz).date()
 
 
 # ================= UTIL =================
@@ -56,14 +65,14 @@ def registrar_membro(nome):
 
 
 def salvar_presenca(nome):
-    hoje = date.today()
+    hoje_ = hoje()
     cur = conn.cursor()
 
-    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje))
+    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje_))
     if cur.fetchone():
         return False
 
-    cur.execute("INSERT INTO presencas VALUES (%s,%s)", (nome, hoje))
+    cur.execute("INSERT INTO presencas VALUES (%s,%s)", (nome, hoje_))
     conn.commit()
     return True
 
@@ -71,19 +80,19 @@ def salvar_presenca(nome):
 # ================= PAINEL =================
 
 def gerar_texto_painel():
-    hoje = date.today()
+    hoje_ = hoje()
     cur = conn.cursor()
 
     cur.execute("SELECT nome FROM membros")
     membros = [m[0] for m in cur.fetchall()]
 
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje_,))
     presentes = [p[0] for p in cur.fetchall()]
 
     faltantes = sorted(set(membros) - set(presentes))
     presentes = sorted(presentes)
 
-    texto = f"📋 PRESENÇA - {hoje.strftime('%d/%m')}\n\n"
+    texto = f"📋 PRESENÇA - {hoje_.strftime('%d/%m')}\n\n"
 
     texto += "🟢 Presentes:\n"
     texto += "\n".join([f"✅ {n}" for n in presentes]) or "Ninguém ainda"
@@ -97,29 +106,34 @@ def gerar_texto_painel():
 
 
 async def atualizar_painel(app):
-    hoje = date.today()
+    hoje_ = hoje()
     cur = conn.cursor()
 
-    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje,))
+    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje_,))
     result = cur.fetchone()
 
     if not result:
+        print("⚠️ Nenhum painel encontrado para hoje")
         return
 
     message_id = result[0]
 
     texto = gerar_texto_painel()
 
-    await app.bot.edit_message_text(
-        chat_id=GRUPO_LIDERANCA,
-        message_id=message_id,
-        text=texto,
-        message_thread_id=TOPICO_PAINEL
-    )
+    try:
+        await app.bot.edit_message_text(
+            chat_id=GRUPO_LIDERANCA,
+            message_id=message_id,
+            text=texto,
+            message_thread_id=TOPICO_PAINEL
+        )
+        print("🔄 Painel atualizado")
+    except Exception as e:
+        print("❌ Erro ao atualizar painel:", e)
 
 
 async def criar_painel(app):
-    hoje = date.today()
+    hoje_ = hoje()
     texto = gerar_texto_painel()
 
     msg = await app.bot.send_message(
@@ -131,21 +145,23 @@ async def criar_painel(app):
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO painel VALUES (%s,%s) ON CONFLICT DO NOTHING",
-        (hoje, msg.message_id)
+        (hoje_, msg.message_id)
     )
     conn.commit()
+
+    print("📌 Painel criado")
 
 
 # ================= FALTAS =================
 
 def marcar_faltas():
-    hoje = date.today()
+    hoje_ = hoje()
     cur = conn.cursor()
 
     cur.execute("SELECT nome FROM membros")
     membros = [m[0] for m in cur.fetchall()]
 
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje,))
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje_,))
     presentes = [p[0] for p in cur.fetchall()]
 
     faltantes = set(membros) - set(presentes)
@@ -153,31 +169,38 @@ def marcar_faltas():
     for nome in faltantes:
         cur.execute(
             "INSERT INTO faltas VALUES (%s,%s) ON CONFLICT DO NOTHING",
-            (nome, hoje)
+            (nome, hoje_)
         )
 
     conn.commit()
+    print("📕 Faltas registradas")
 
 
-# ================= COMANDO /lista =================
+# ================= COMANDO =================
 
 async def comando_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+
+    print("📩 /lista recebido de:", msg.chat.id)
+
     if not msg:
         return
 
     if msg.chat.id not in [GRUPO_ID, GRUPO_LIDERANCA]:
+        print("⛔ Comando fora dos grupos permitidos")
         return
 
     texto = gerar_texto_painel()
 
     await msg.reply_text(texto)
+    print("✅ Lista enviada")
 
 
 # ================= DETECÇÃO =================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+
     if not msg:
         return
 
@@ -191,9 +214,14 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not texto:
         return
 
+    print("📨 Mensagem recebida")
+
     nome = extrair_nome(texto)
     if not nome:
+        print("⚠️ Nome não identificado")
         return
+
+    print("👤 Nome detectado:", nome)
 
     registrar_membro(nome)
 
@@ -212,7 +240,6 @@ def main():
 
     scheduler = AsyncIOScheduler()
 
-    # criar painel 00:00
     scheduler.add_job(
         lambda: app.create_task(criar_painel(app)),
         "cron",
@@ -220,7 +247,6 @@ def main():
         minute=0
     )
 
-    # finalizar dia 23:59
     scheduler.add_job(
         marcar_faltas,
         "cron",
@@ -235,7 +261,7 @@ def main():
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot com painel profissional rodando...")
+    print("🚀 Bot rodando (modo estável)...")
 
     app.run_polling()
 
