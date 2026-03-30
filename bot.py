@@ -35,11 +35,12 @@ def limpar_nome(nome):
 
 def extrair_nome(texto):
     for linha in texto.split("\n"):
-        if "📜" in linha:
-            partes = linha.split()
-            for i, p in enumerate(partes):
-                if p.isdigit():
-                    return limpar_nome(" ".join(partes[i + 1:]))
+        partes = linha.strip().split()
+
+        if len(partes) >= 2 and partes[0].isdigit():
+            nome = " ".join(partes[1:])
+            return limpar_nome(nome)
+
     return None
 
 
@@ -60,10 +61,7 @@ def mensagem_pilar(nome):
 
 def registrar_membro(nome):
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
-        (nome,)
-    )
+    cur.execute("INSERT INTO membros VALUES (%s) ON CONFLICT DO NOTHING", (nome,))
     conn.commit()
 
 
@@ -71,17 +69,11 @@ def salvar_presenca(nome):
     hoje_ = hoje()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT 1 FROM presencas WHERE nome=%s AND data=%s",
-        (nome, hoje_)
-    )
+    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje_))
     if cur.fetchone():
         return False
 
-    cur.execute(
-        "INSERT INTO presencas (nome, data) VALUES (%s, %s)",
-        (nome, hoje_)
-    )
+    cur.execute("INSERT INTO presencas VALUES (%s,%s)", (nome, hoje_))
     conn.commit()
     return True
 
@@ -122,26 +114,20 @@ async def atualizar_painel(app):
     result = cur.fetchone()
 
     if not result:
-        print("⚠️ Nenhum painel encontrado para hoje")
         return
 
     message_id = result[0]
     texto = gerar_texto_painel()
 
-    try:
-        await app.bot.edit_message_text(
-            chat_id=GRUPO_LIDERANCA,
-            message_id=message_id,
-            text=texto,
-            message_thread_id=TOPICO_PAINEL
-        )
-        print("🔄 Painel atualizado")
-    except Exception as e:
-        print("❌ Erro ao atualizar painel:", e)
+    await app.bot.edit_message_text(
+        chat_id=GRUPO_LIDERANCA,
+        message_id=message_id,
+        text=texto,
+        message_thread_id=TOPICO_PAINEL
+    )
 
 
 async def criar_painel(app):
-    print("🆕 Criando novo painel...")
     hoje_ = hoje()
     texto = gerar_texto_painel()
 
@@ -153,12 +139,10 @@ async def criar_painel(app):
 
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO painel (data, message_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+        "INSERT INTO painel VALUES (%s,%s) ON CONFLICT DO NOTHING",
         (hoje_, msg.message_id)
     )
     conn.commit()
-
-    print("📌 Painel criado")
 
 
 # ================= FALTAS =================
@@ -177,7 +161,7 @@ def marcar_faltas():
 
     for nome in faltantes:
         cur.execute(
-            "INSERT INTO faltas (nome, data) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+            "INSERT INTO faltas VALUES (%s,%s) ON CONFLICT DO NOTHING",
             (nome, hoje_)
         )
 
@@ -185,38 +169,11 @@ def marcar_faltas():
     print("📕 Faltas registradas")
 
 
-# ================= FECHAMENTO =================
-
-async def fechar_dia(app):
-    print("⏰ Rodando fechamento do dia...")
-
-    hoje_ = hoje()
-    cur = conn.cursor()
-
+async def fechar_e_novo_dia(app):
+    print("🌙 Fechando dia...")
     marcar_faltas()
-
-    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje_,))
-    result = cur.fetchone()
-
-    if not result:
-        print("⚠️ Painel não encontrado para fechamento")
-        return
-
-    message_id = result[0]
-
-    texto = gerar_texto_painel()
-    texto += "\n\n🔒 Dia encerrado pelo Pilar da Sabedoria"
-
-    try:
-        await app.bot.edit_message_text(
-            chat_id=GRUPO_LIDERANCA,
-            message_id=message_id,
-            text=texto,
-            message_thread_id=TOPICO_PAINEL
-        )
-        print("🔒 Dia encerrado com sucesso")
-    except Exception as e:
-        print("❌ Erro ao fechar o dia:", e)
+    await criar_painel(app)
+    print("🌅 Novo painel criado")
 
 
 # ================= COMANDO =================
@@ -224,19 +181,14 @@ async def fechar_dia(app):
 async def comando_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
-    print("📩 /lista recebido de:", msg.chat.id)
-
     if not msg:
         return
 
     if msg.chat.id not in [GRUPO_ID, GRUPO_LIDERANCA]:
-        print("⛔ Comando fora dos grupos permitidos")
         return
 
     texto = gerar_texto_painel()
-
     await msg.reply_text(texto)
-    print("✅ Lista enviada")
 
 
 # ================= DETECÇÃO =================
@@ -278,27 +230,16 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # 🔥 CORREÇÃO DO HANDLER
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, detectar))
     app.add_handler(CommandHandler("lista", comando_lista))
+    app.add_handler(MessageHandler(filters.ALL, detectar))
 
-    # 🔥 TIMEZONE CORRIGIDO
     scheduler = AsyncIOScheduler(timezone=tz)
 
     scheduler.add_job(
-        fechar_dia,
+        lambda: app.create_task(fechar_e_novo_dia(app)),
         "cron",
         hour=23,
-        minute=59,
-        args=[app]
-    )
-
-    scheduler.add_job(
-        criar_painel,
-        "cron",
-        hour=0,
-        minute=0,
-        args=[app]
+        minute=59
     )
 
     async def start_scheduler(app):
@@ -308,9 +249,9 @@ def main():
 
     app.post_init = start_scheduler
 
-    print("🚀 Bot rodando (modo estável)...")
+    print("🚀 Bot rodando (FINAL)...")
 
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
