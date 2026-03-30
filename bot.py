@@ -10,10 +10,6 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, fil
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# ========================
-# IDS
-# ========================
-
 GRUPO_PRESENCA = -1003792787717
 TOPICO_PRESENCA = 16325
 
@@ -21,36 +17,14 @@ GRUPO_LIDER = -1003806440152
 TOPICO_LISTA = 116
 
 # ========================
-# BANCO
+# CONEXÃO SEGURA
 # ========================
 
-conn = psycopg2.connect(DATABASE_URL)
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS jogadores (
-    nome TEXT PRIMARY KEY
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS presencas (
-    nome TEXT,
-    data TEXT
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS controle (
-    chave TEXT PRIMARY KEY,
-    valor TEXT
-)
-""")
-
-conn.commit()
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
 
 # ========================
-# DATA BR
+# DATA
 # ========================
 
 def hoje():
@@ -63,8 +37,8 @@ def hoje():
 def lore(nome):
     frases = [
         f"📜 O Pilar registra: {nome}.",
-        f"✨ Presença absorvida pelo Pilar: {nome}.",
-        f"🗿 O Pilar reconhece {nome}.",
+        f"✨ Presença absorvida: {nome}.",
+        f"🗿 {nome} foi reconhecido pelo Pilar.",
         f"🔥 Energia dourada envolve {nome}.",
         f"🧠 Conhecimento registrado: {nome}.",
         f"⚡ Presença confirmada: {nome}"
@@ -88,141 +62,163 @@ def extrair_nome(texto):
 # ========================
 
 def gerar_lista():
-    data = hoje()
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
 
-    cursor.execute("SELECT nome FROM jogadores")
-    todos = [x[0] for x in cursor.fetchall()]
+        data = hoje()
 
-    cursor.execute("SELECT nome FROM presencas WHERE data=%s", (data,))
-    presentes = [x[0] for x in cursor.fetchall()]
+        cursor.execute("SELECT nome FROM jogadores")
+        todos = [x[0] for x in cursor.fetchall()]
 
-    faltantes = [n for n in todos if n not in presentes]
+        cursor.execute("SELECT nome FROM presencas WHERE data=%s", (data,))
+        presentes = [x[0] for x in cursor.fetchall()]
 
-    texto = "📋 PRESENÇA DIÁRIA\n\n"
+        faltantes = [n for n in todos if n not in presentes]
 
-    texto += "✅ PRESENTES:\n"
-    texto += "\n".join([f"✔️ {p}" for p in presentes]) if presentes else "Nenhum"
+        conn.close()
 
-    texto += "\n\n❌ FALTANTES:\n"
-    texto += "\n".join([f"❌ {f}" for f in faltantes]) if faltantes else "Nenhum"
+        texto = "📋 PRESENÇA DIÁRIA\n\n"
 
-    return texto
+        texto += "✅ PRESENTES:\n"
+        texto += "\n".join([f"✔️ {p}" for p in presentes]) if presentes else "Nenhum"
+
+        texto += "\n\n❌ FALTANTES:\n"
+        texto += "\n".join([f"❌ {f}" for f in faltantes]) if faltantes else "Nenhum"
+
+        return texto
+
+    except Exception as e:
+        print("ERRO LISTA:", e)
+        return "Erro ao gerar lista."
 
 # ========================
-# ATUALIZAR LISTA FIXA
+# ATUALIZAR LISTA
 # ========================
 
 async def atualizar_lista(bot):
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
 
-    texto = gerar_lista()
+        texto = gerar_lista()
 
-    cursor.execute("SELECT valor FROM controle WHERE chave='msg_lista'")
-    res = cursor.fetchone()
+        cursor.execute("SELECT valor FROM controle WHERE chave='msg_lista'")
+        res = cursor.fetchone()
 
-    if res:
-        try:
-            await bot.edit_message_text(
-                chat_id=GRUPO_LIDER,
-                message_id=int(res[0]),
-                text=texto
-            )
-            return
-        except:
-            pass
+        if res:
+            try:
+                await bot.edit_message_text(
+                    chat_id=GRUPO_LIDER,
+                    message_id=int(res[0]),
+                    text=texto
+                )
+                conn.close()
+                return
+            except:
+                pass
 
-    # cria nova mensagem
-    msg = await bot.send_message(
-        chat_id=GRUPO_LIDER,
-        message_thread_id=TOPICO_LISTA,
-        text=texto
-    )
+        msg = await bot.send_message(
+            chat_id=GRUPO_LIDER,
+            message_thread_id=TOPICO_LISTA,
+            text=texto
+        )
 
-    cursor.execute("""
-    INSERT INTO controle (chave, valor)
-    VALUES ('msg_lista', %s)
-    ON CONFLICT (chave) DO UPDATE SET valor=%s
-    """, (str(msg.message_id), str(msg.message_id)))
+        cursor.execute("""
+        INSERT INTO controle (chave, valor)
+        VALUES ('msg_lista', %s)
+        ON CONFLICT (chave) DO UPDATE SET valor=%s
+        """, (str(msg.message_id), str(msg.message_id)))
 
-    conn.commit()
+        conn.commit()
+        conn.close()
+
+    except Exception as e:
+        print("ERRO UPDATE LISTA:", e)
 
 # ========================
 # COMANDO /lista
 # ========================
 
 async def lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_chat.id != GRUPO_LIDER:
+            return
 
-    if update.effective_chat.id != GRUPO_LIDER:
-        return
+        texto = gerar_lista()
 
-    texto = gerar_lista()
+        await context.bot.send_message(
+            chat_id=GRUPO_LIDER,
+            message_thread_id=TOPICO_LISTA,
+            text=texto
+        )
 
-    await context.bot.send_message(
-        chat_id=GRUPO_LIDER,
-        message_thread_id=TOPICO_LISTA,
-        text=texto
-    )
+    except Exception as e:
+        print("ERRO /lista:", e)
 
 # ========================
-# DETECTAR PERFIL
+# DETECTAR
 # ========================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if not update.message:
-        return
-
-    if update.effective_chat.id != GRUPO_PRESENCA:
-        return
-
-    if update.message.message_thread_id:
-        if update.message.message_thread_id != TOPICO_PRESENCA:
+    try:
+        if not update.message:
             return
 
-    texto = update.message.text or ""
-    nome = extrair_nome(texto)
+        if update.effective_chat.id != GRUPO_PRESENCA:
+            return
 
-    if not nome:
-        return
+        if update.message.message_thread_id:
+            if update.message.message_thread_id != TOPICO_PRESENCA:
+                return
 
-    data = hoje()
+        texto = update.message.text or ""
+        nome = extrair_nome(texto)
 
-    print(f"📥 Detectado: {nome}")
+        if not nome:
+            return
 
-    # salva jogador
-    cursor.execute(
-        "INSERT INTO jogadores VALUES (%s) ON CONFLICT DO NOTHING",
-        (nome,)
-    )
+        print("✅ Detectado:", nome)
 
-    # evita duplicado
-    cursor.execute(
-        "SELECT 1 FROM presencas WHERE nome=%s AND data=%s",
-        (nome, data)
-    )
+        conn = get_conn()
+        cursor = conn.cursor()
 
-    if cursor.fetchone():
-        return
+        data = hoje()
 
-    # salva presença
-    cursor.execute(
-        "INSERT INTO presencas VALUES (%s, %s)",
-        (nome, data)
-    )
+        cursor.execute(
+            "INSERT INTO jogadores VALUES (%s) ON CONFLICT DO NOTHING",
+            (nome,)
+        )
 
-    conn.commit()
+        cursor.execute(
+            "SELECT 1 FROM presencas WHERE nome=%s AND data=%s",
+            (nome, data)
+        )
 
-    # resposta no grupo
-    await update.message.reply_text(lore(nome))
+        if cursor.fetchone():
+            conn.close()
+            return
 
-    # notificação liderança
-    await context.bot.send_message(
-        chat_id=GRUPO_LIDER,
-        message_thread_id=TOPICO_LISTA,
-        text=f"✅ Presença: {nome}"
-    )
+        cursor.execute(
+            "INSERT INTO presencas VALUES (%s, %s)",
+            (nome, data)
+        )
 
-    # atualiza lista automaticamente
-    await atualizar_lista(context.bot)
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(lore(nome))
+
+        await context.bot.send_message(
+            chat_id=GRUPO_LIDER,
+            message_thread_id=TOPICO_LISTA,
+            text=f"✅ Presença: {nome}"
+        )
+
+        await atualizar_lista(context.bot)
+
+    except Exception as e:
+        print("ERRO DETECTAR:", e)
 
 # ========================
 # MAIN
@@ -234,7 +230,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT, detectar))
     app.add_handler(CommandHandler("lista", lista))
 
-    print("🚀 Pilar da Sabedoria ativo...")
+    print("🚀 Pilar ativo (modo estável)...")
     app.run_polling()
 
 if __name__ == "__main__":
