@@ -60,7 +60,10 @@ def mensagem_pilar(nome):
 
 def registrar_membro(nome):
     cur = conn.cursor()
-    cur.execute("INSERT INTO membros VALUES (%s) ON CONFLICT DO NOTHING", (nome,))
+    cur.execute(
+        "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
+        (nome,)
+    )
     conn.commit()
 
 
@@ -68,11 +71,17 @@ def salvar_presenca(nome):
     hoje_ = hoje()
     cur = conn.cursor()
 
-    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje_))
+    cur.execute(
+        "SELECT 1 FROM presencas WHERE nome=%s AND data=%s",
+        (nome, hoje_)
+    )
     if cur.fetchone():
         return False
 
-    cur.execute("INSERT INTO presencas VALUES (%s,%s)", (nome, hoje_))
+    cur.execute(
+        "INSERT INTO presencas (nome, data) VALUES (%s, %s)",
+        (nome, hoje_)
+    )
     conn.commit()
     return True
 
@@ -117,7 +126,6 @@ async def atualizar_painel(app):
         return
 
     message_id = result[0]
-
     texto = gerar_texto_painel()
 
     try:
@@ -144,7 +152,7 @@ async def criar_painel(app):
 
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO painel VALUES (%s,%s) ON CONFLICT DO NOTHING",
+        "INSERT INTO painel (data, message_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
         (hoje_, msg.message_id)
     )
     conn.commit()
@@ -168,12 +176,44 @@ def marcar_faltas():
 
     for nome in faltantes:
         cur.execute(
-            "INSERT INTO faltas VALUES (%s,%s) ON CONFLICT DO NOTHING",
+            "INSERT INTO faltas (nome, data) VALUES (%s,%s) ON CONFLICT DO NOTHING",
             (nome, hoje_)
         )
 
     conn.commit()
     print("📕 Faltas registradas")
+
+
+# ================= FECHAMENTO =================
+
+async def fechar_dia(app):
+    hoje_ = hoje()
+    cur = conn.cursor()
+
+    marcar_faltas()
+
+    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje_,))
+    result = cur.fetchone()
+
+    if not result:
+        print("⚠️ Painel não encontrado para fechamento")
+        return
+
+    message_id = result[0]
+
+    texto = gerar_texto_painel()
+    texto += "\n\n🔒 Dia encerrado pelo Pilar da Sabedoria"
+
+    try:
+        await app.bot.edit_message_text(
+            chat_id=GRUPO_LIDERANCA,
+            message_id=message_id,
+            text=texto,
+            message_thread_id=TOPICO_PAINEL
+        )
+        print("🔒 Dia encerrado com sucesso")
+    except Exception as e:
+        print("❌ Erro ao fechar o dia:", e)
 
 
 # ================= COMANDO =================
@@ -240,18 +280,20 @@ def main():
 
     scheduler = AsyncIOScheduler()
 
+    # 🔒 fechamento do dia
+    scheduler.add_job(
+        lambda: app.create_task(fechar_dia(app)),
+        "cron",
+        hour=23,
+        minute=59
+    )
+
+    # 🆕 novo painel
     scheduler.add_job(
         lambda: app.create_task(criar_painel(app)),
         "cron",
         hour=0,
         minute=0
-    )
-
-    scheduler.add_job(
-        marcar_faltas,
-        "cron",
-        hour=23,
-        minute=59
     )
 
     async def start_scheduler(app):
