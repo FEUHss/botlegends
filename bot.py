@@ -54,7 +54,7 @@ def extrair_nivel(texto):
                 return int(numeros[0])
     return None
 
-# 🔥 EXTRAÇÃO DE STATUS CORRIGIDA (ANTI-BUFF)
+# 🔥 EXTRAÇÃO DE STATUS CORRIGIDA (ANTI-BUFF + HP FIX)
 def extrair_status(texto):
     dados = {}
 
@@ -73,10 +73,11 @@ def extrair_status(texto):
                 dados["def"] = float(numeros[1])
                 dados["crit"] = float(numeros[2])
 
+        # 🔥 CORREÇÃO DO HP (pega o valor após /)
         elif "HP:" in linha:
-    numeros = re.findall(r"\d+", linha)
-    if len(numeros) >= 2:
-        dados["hp"] = int(numeros[1])  # 🔥 pega o HP MÁXIMO (correto)
+            match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
+            if match:
+                dados["hp"] = int(match.group(2))
 
         elif "Gold:" in linha:
             numeros = re.findall(r"\d+", linha)
@@ -380,7 +381,7 @@ def main():
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.start()
 
-    print("🚀 BOT FINAL COMPLETO (ANTI-BUFF ATIVO)")
+    print("🚀 BOT FINAL COMPLETO (ANTI-BUFF + HP FIX)")
 
     app.run_polling(drop_pending_updates=True)
 
