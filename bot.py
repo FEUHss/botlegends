@@ -50,18 +50,18 @@ def extrair_nivel(texto):
                 return int(numeros[0])
     return None
 
-# 🔥 EXTRAÇÃO STATUS FINAL CORRIGIDA
+# 🔥 EXTRAÇÃO STATUS FINAL (ANTI-BUFF DEFINITIVO + HP CORRETO)
 def extrair_status(texto):
     dados = {}
 
     for linha in texto.split("\n"):
         linha = linha.strip()
 
-        # ❌ IGNORA APENAS BUFF
-        if linha.startswith("+"):
+        # ❌ IGNORA BUFFS (sempre tem "/" ou começa com "+")
+        if linha.startswith("+") or "/" in linha:
             continue
 
-        # ✅ STATUS PRINCIPAL
+        # ✅ STATUS REAL
         if "ATK" in linha and "DEF" in linha and "CRIT" in linha:
             numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
             if len(numeros) >= 3:
@@ -69,7 +69,7 @@ def extrair_status(texto):
                 dados["def"] = float(numeros[1])
                 dados["crit"] = float(numeros[2])
 
-        # 🔥 HP CORRETO (SEGUNDO VALOR)
+        # 🔥 HP TOTAL (SEGUNDO VALOR)
         elif "HP:" in linha:
             match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
             if match:
@@ -196,7 +196,7 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nivel = extrair_nivel(texto)
     dados = extrair_status(texto)
 
-    print("DEBUG STATUS:", dados)  # 👈 ajuda se der problema
+    print("DEBUG STATUS:", dados)
 
     registrar_membro(nome)
 
@@ -224,7 +224,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL CORRIGIDO (HP + STATUS OK)")
+    print("🚀 BOT FINAL (ANTI-BUFF DEFINITIVO + HP CORRETO)")
 
     app.run_polling(drop_pending_updates=True)
 
