@@ -39,7 +39,6 @@ def extrair_nome(texto):
                 return limpar_nome(" ".join(partes[i + 1:]))
     return None
 
-# 🔥 EXTRAÇÃO DE XP
 def extrair_xp(texto):
     for linha in texto.split("\n"):
         if "XP" in linha:
@@ -76,7 +75,6 @@ def salvar_presenca(nome):
     conn.commit()
     return True
 
-# 🔥 SALVAR XP
 def salvar_xp(nome, xp):
     if xp is None:
         return
@@ -229,17 +227,25 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     nome = extrair_nome(texto)
     if not nome:
+        print("⚠️ Nome não identificado")
         return
 
     xp = extrair_xp(texto)
 
     registrar_membro(nome)
 
-    if salvar_presenca(nome):
-        salvar_xp(nome, xp)
+    salvou = salvar_presenca(nome)
 
+    # 🔥 salva XP sempre
+    salvar_xp(nome, xp)
+
+    if salvou:
         await msg.reply_text(mensagem_pilar(nome))
-        await atualizar_painel(context.application)
+    else:
+        await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")
+
+    # 🔥 sempre atualiza painel
+    await atualizar_painel(context.application)
 
 # ================= MAIN =================
 
@@ -254,9 +260,10 @@ def main():
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.start()
 
-    print("🚀 Bot com XP rodando")
+    print("🚀 Bot com XP rodando (VERSÃO FINAL CORRIGIDA)")
 
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
+
