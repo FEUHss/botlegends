@@ -57,15 +57,12 @@ def extrair_status(texto):
     for linha in texto.split("\n"):
         linha = linha.strip()
 
-        # ❌ IGNORA BUFF (linha começa com +)
         if linha.startswith("+"):
             continue
 
-        # ❌ IGNORA linhas com "/" EXCETO HP
         if "/" in linha and "HP" not in linha:
             continue
 
-        # ✅ STATUS REAL
         if "ATK" in linha and "DEF" in linha and "CRIT" in linha:
             numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
             if len(numeros) >= 3:
@@ -73,7 +70,6 @@ def extrair_status(texto):
                 dados["def"] = float(numeros[1])
                 dados["crit"] = float(numeros[2])
 
-        # 🔥 HP FUNCIONANDO EM TODOS OS CASOS
         elif "HP" in linha:
             match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
             if match:
@@ -157,6 +153,58 @@ def salvar_status(nome, dados):
     ))
     conn.commit()
 
+# ================= XP (RESTAURADO) =================
+
+def get_rank_xp():
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT nome, nivel, xp FROM xp_logs
+        WHERE data=%s
+        ORDER BY xp DESC
+    """, (hoje(),))
+
+    dados = cur.fetchall()
+
+    if not dados:
+        return "Sem dados de XP hoje."
+
+    texto = "🏆 RANKING XP\n\n"
+    for i, (nome, nivel, xp) in enumerate(dados, 1):
+        texto += f"{i}. {nome} — Lv {nivel} - {xp} XP\n"
+
+    return texto
+
+def get_evolucao(nome):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT xp, data FROM xp_logs
+        WHERE nome=%s
+        ORDER BY data DESC
+        LIMIT 2
+    """, (nome,))
+
+    dados = cur.fetchall()
+
+    if len(dados) < 2:
+        return f"Dados insuficientes para evolução de {nome}"
+
+    xp_hoje, _ = dados[0]
+    xp_ontem, _ = dados[1]
+
+    diff = xp_hoje - xp_ontem
+    simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
+
+    return f"{simbolo} {nome}\nXP: {xp_hoje}\nVariação: {diff:+}"
+
+async def comando_xp(update, context):
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(get_rank_xp())
+    else:
+        nome = limpar_nome(" ".join(args))
+        await update.message.reply_text(get_evolucao(nome))
+
 # ================= RANK =================
 
 def gerar_rank(campo, titulo):
@@ -223,6 +271,10 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # XP
+    app.add_handler(CommandHandler("xp", comando_xp))
+
+    # RANKS
     app.add_handler(CommandHandler("atk", lambda u,c: u.message.reply_text(gerar_rank("atk","ATAQUE"))))
     app.add_handler(CommandHandler("def", lambda u,c: u.message.reply_text(gerar_rank("def","DEFESA"))))
     app.add_handler(CommandHandler("hp", lambda u,c: u.message.reply_text(gerar_rank("hp","HP"))))
@@ -232,7 +284,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL (HP CORRIGIDO + ANTI-BUFF FUNCIONAL)")
+    print("🚀 BOT FINAL (XP RESTAURADO + HP OK + ANTI-BUFF)")
 
     app.run_polling(drop_pending_updates=True)
 
