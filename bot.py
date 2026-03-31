@@ -2,6 +2,7 @@ import os
 import psycopg2
 import random
 import pytz
+import re
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
@@ -33,16 +34,22 @@ def limpar_nome(nome):
 def extrair_nome(texto):
     for linha in texto.split("\n"):
         partes = linha.strip().split()
-
         for i, p in enumerate(partes):
             if p.isdigit():
-                nome = " ".join(partes[i + 1:])
-                return limpar_nome(nome)
+                return limpar_nome(" ".join(partes[i + 1:]))
+    return None
 
+# 🔥 EXTRAÇÃO DE XP
+def extrair_xp(texto):
+    for linha in texto.split("\n"):
+        if "XP" in linha:
+            numeros = re.findall(r"\d+", linha.replace(".", ""))
+            if numeros:
+                return int(numeros[0])
     return None
 
 def mensagem_pilar(nome):
-    frases = [
+    return random.choice([
         f"📜 O Pilar registra: {nome} esteve presente.",
         f"🗿 O Pilar da Sabedoria reconhece {nome}.",
         f"✨ A presença de {nome} foi gravada no Pilar.",
@@ -50,50 +57,99 @@ def mensagem_pilar(nome):
         f"🔥 Feixes dourados registram a presença de {nome}.",
         f"🧠 O conhecimento do Pilar agora carrega o nome de {nome}.",
         f"⚡ Registrado: {nome}"
-    ]
-    return random.choice(frases)
+    ])
 
 # ================= BANCO =================
 
 def registrar_membro(nome):
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING",
-        (nome,)
-    )
+    cur.execute("INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING", (nome,))
     conn.commit()
 
 def salvar_presenca(nome):
-    hoje_ = hoje()
     cur = conn.cursor()
-
-    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje_))
+    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje()))
     if cur.fetchone():
         return False
 
-    cur.execute(
-        "INSERT INTO presencas (nome, data) VALUES (%s,%s)",
-        (nome, hoje_)
-    )
+    cur.execute("INSERT INTO presencas (nome, data) VALUES (%s,%s)", (nome, hoje()))
     conn.commit()
     return True
+
+# 🔥 SALVAR XP
+def salvar_xp(nome, xp):
+    if xp is None:
+        return
+
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO xp_logs (nome, xp, data)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (nome, data)
+        DO UPDATE SET xp = EXCLUDED.xp
+    """, (nome, xp, hoje()))
+    conn.commit()
+
+# ================= XP =================
+
+def get_rank_xp():
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT nome, xp FROM xp_logs
+        WHERE data=%s
+        ORDER BY xp DESC
+    """, (hoje(),))
+
+    dados = cur.fetchall()
+
+    if not dados:
+        return "Sem dados de XP hoje."
+
+    texto = "🏆 RANKING XP\n\n"
+    for i, (nome, xp) in enumerate(dados, 1):
+        texto += f"{i}. {nome} — {xp}\n"
+
+    return texto
+
+def get_evolucao(nome):
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT xp, data FROM xp_logs
+        WHERE nome=%s
+        ORDER BY data DESC
+        LIMIT 2
+    """, (nome,))
+
+    dados = cur.fetchall()
+
+    if len(dados) < 2:
+        return f"Dados insuficientes para evolução de {nome}"
+
+    xp_hoje, _ = dados[0]
+    xp_ontem, _ = dados[1]
+
+    diff = xp_hoje - xp_ontem
+
+    simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
+
+    return f"{simbolo} {nome}\nXP: {xp_hoje}\nVariação: {diff:+}"
 
 # ================= PAINEL =================
 
 def gerar_texto_painel():
-    hoje_ = hoje()
     cur = conn.cursor()
 
     cur.execute("SELECT nome FROM membros")
     membros = [m[0] for m in cur.fetchall()]
 
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje_,))
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje(),))
     presentes = [p[0] for p in cur.fetchall()]
 
     faltantes = sorted(set(membros) - set(presentes))
     presentes = sorted(presentes)
 
-    texto = f"📜 PRESENÇA DA GUILDA — {hoje_.strftime('%d/%m')}\n\n"
+    texto = f"📜 PRESENÇA DA GUILDA — {hoje().strftime('%d/%m')}\n\n"
 
     texto += "🟢 Presentes:\n"
     texto += "\n".join([f"✅ {n}" for n in presentes]) if presentes else "Ninguém ainda"
@@ -106,116 +162,52 @@ def gerar_texto_painel():
     return texto
 
 async def atualizar_painel(app):
-    hoje_ = hoje()
     cur = conn.cursor()
-
-    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje_,))
+    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje(),))
     result = cur.fetchone()
 
     if not result:
-        print("⚠️ Painel não existe, criando...")
         await criar_painel(app)
         return
-
-    message_id = result[0]
-    texto = gerar_texto_painel()
 
     try:
         await app.bot.edit_message_text(
             chat_id=GRUPO_LIDERANCA,
-            message_id=message_id,
-            text=texto + f"\n\n🕒 Atualizado: {datetime.now(tz).strftime('%H:%M:%S')}"
+            message_id=result[0],
+            text=gerar_texto_painel()
         )
-        print("🔄 Painel atualizado")
-
     except Exception as e:
-        print("❌ Erro ao atualizar painel:", e)
-
-        if "message to edit not found" in str(e).lower():
-            print("♻️ Painel perdido, recriando...")
-
-            msg = await app.bot.send_message(
-                chat_id=GRUPO_LIDERANCA,
-                text=texto,
-                message_thread_id=TOPICO_PAINEL
-            )
-
-            cur.execute("""
-                INSERT INTO painel (data, message_id)
-                VALUES (%s, %s)
-                ON CONFLICT (data)
-                DO UPDATE SET message_id = EXCLUDED.message_id
-            """, (hoje_, msg.message_id))
-            conn.commit()
+        print("Erro painel:", e)
 
 async def criar_painel(app):
-    hoje_ = hoje()
-    texto = gerar_texto_painel()
-
     msg = await app.bot.send_message(
         chat_id=GRUPO_LIDERANCA,
-        text=texto,
+        text=gerar_texto_painel(),
         message_thread_id=TOPICO_PAINEL
     )
 
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO painel (data, message_id)
-        VALUES (%s, %s)
+        VALUES (%s,%s)
         ON CONFLICT (data)
         DO UPDATE SET message_id = EXCLUDED.message_id
-    """, (hoje_, msg.message_id))
+    """, (hoje(), msg.message_id))
     conn.commit()
 
-# ================= FALTAS =================
+# ================= COMANDOS =================
 
-def marcar_faltas():
-    hoje_ = hoje()
-    cur = conn.cursor()
+async def comando_lista(update, context):
+    await update.message.reply_text(gerar_texto_painel())
 
-    cur.execute("SELECT nome FROM membros")
-    membros = [m[0] for m in cur.fetchall()]
+async def comando_xp(update, context):
+    args = context.args
 
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje_,))
-    presentes = [p[0] for p in cur.fetchall()]
-
-    faltantes = set(membros) - set(presentes)
-
-    for nome in faltantes:
-        cur.execute(
-            "INSERT INTO faltas (nome, data) VALUES (%s,%s) ON CONFLICT DO NOTHING",
-            (nome, hoje_)
-        )
-
-    conn.commit()
-    print("📕 Faltas registradas")
-
-async def fechar_e_novo_dia(app):
-    print("🌙 Fechando dia...")
-
-    marcar_faltas()
-    await atualizar_painel(app)
-
-    import asyncio
-    await asyncio.sleep(2)
-
-    await criar_painel(app)
-
-    print("🌅 Novo painel criado")
-
-# ================= COMANDO =================
-
-async def comando_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-
-    if not msg:
-        return
-
-    if msg.chat.id not in [GRUPO_ID, GRUPO_LIDERANCA]:
-        return
-
-    texto = gerar_texto_painel()
-    await msg.reply_text(texto)
+    if not args:
+        await update.message.reply_text(get_rank_xp())
+    else:
+        nome = limpar_nome(" ".join(args))
+        await update.message.reply_text(get_evolucao(nome))
 
 # ================= DETECÇÃO =================
 
@@ -225,11 +217,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # 🔥 DEBUG
-    print("CHAT:", msg.chat.id)
-    print("THREAD:", msg.message_thread_id)
-    print("FORWARDED:", msg.forward_from or msg.forward_from_chat)
-
     if msg.chat.id != GRUPO_ID:
         return
 
@@ -237,23 +224,20 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     texto = msg.text or msg.caption
-
     if not texto:
-        print("⚠️ Mensagem sem texto")
         return
-
-    print("📨 Mensagem recebida")
 
     nome = extrair_nome(texto)
     if not nome:
-        print("⚠️ Nome não identificado")
         return
 
-    print("👤 Nome detectado:", nome)
+    xp = extrair_xp(texto)
 
     registrar_membro(nome)
 
     if salvar_presenca(nome):
+        salvar_xp(nome, xp)
+
         await msg.reply_text(mensagem_pilar(nome))
         await atualizar_painel(context.application)
 
@@ -263,30 +247,16 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("lista", comando_lista))
+    app.add_handler(CommandHandler("xp", comando_xp))
 
-    # 🔥 CORREÇÃO DEFINITIVA
     app.add_handler(MessageHandler(filters.ALL, detectar))
 
     scheduler = AsyncIOScheduler(timezone=tz)
+    scheduler.start()
 
-    scheduler.add_job(
-        lambda: app.create_task(fechar_e_novo_dia(app)),
-        "cron",
-        hour=23,
-        minute=59
-    )
-
-    async def start_scheduler(app):
-        scheduler.start()
-        await criar_painel(app)
-        print("🧠 Scheduler + painel iniciado")
-
-    app.post_init = start_scheduler
-
-    print("🚀 Bot rodando (FINAL MASTER)...")
+    print("🚀 Bot com XP rodando")
 
     app.run_polling(drop_pending_updates=True)
-
 
 if __name__ == "__main__":
     main()
