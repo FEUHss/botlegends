@@ -50,14 +50,14 @@ def extrair_nivel(texto):
                 return int(numeros[0])
     return None
 
-# 🔥 EXTRAÇÃO STATUS FINAL (ANTI-BUFF DEFINITIVO + HP CORRETO)
+# 🔥 EXTRAÇÃO STATUS FINAL (ANTI-BUFF + HP INTELIGENTE)
 def extrair_status(texto):
     dados = {}
 
     for linha in texto.split("\n"):
         linha = linha.strip()
 
-        # ❌ IGNORA BUFFS (sempre tem "/" ou começa com "+")
+        # ❌ IGNORA BUFFS
         if linha.startswith("+") or "/" in linha:
             continue
 
@@ -69,11 +69,15 @@ def extrair_status(texto):
                 dados["def"] = float(numeros[1])
                 dados["crit"] = float(numeros[2])
 
-        # 🔥 HP TOTAL (SEGUNDO VALOR)
-        elif "HP:" in linha:
+        # 🔥 HP INTELIGENTE (corrigido)
+        elif "HP" in linha:
             match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
             if match:
-                dados["hp"] = int(match.group(2))
+                dados["hp"] = int(match.group(2))  # HP total
+            else:
+                numeros = re.findall(r"\d+", linha)
+                if numeros:
+                    dados["hp"] = int(numeros[-1])  # fallback
 
         elif "Gold:" in linha:
             numeros = re.findall(r"\d+", linha)
@@ -224,7 +228,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL (ANTI-BUFF DEFINITIVO + HP CORRETO)")
+    print("🚀 BOT FINAL (HP INTELIGENTE + ANTI-BUFF ATIVO)")
 
     app.run_polling(drop_pending_updates=True)
 
