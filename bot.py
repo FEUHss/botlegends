@@ -39,16 +39,14 @@ def extrair_nome(texto):
                 return limpar_nome(" ".join(partes[i + 1:]))
     return None
 
-# 🔥 EXTRAÇÃO XP CORRIGIDA
 def extrair_xp(texto):
     for linha in texto.split("\n"):
         if "XP" in linha:
             numeros = re.findall(r"\d+", linha.replace(".", "").replace(",", ""))
             if len(numeros) >= 2:
-                return int(numeros[1])  # pega o XP correto
+                return int(numeros[1])
     return None
 
-# 🔥 EXTRAÇÃO DE NÍVEL
 def extrair_nivel(texto):
     for linha in texto.split("\n"):
         if "Lv" in linha:
@@ -85,7 +83,6 @@ def salvar_presenca(nome):
     conn.commit()
     return True
 
-# 🔥 SALVAR XP + NÍVEL
 def salvar_xp(nome, xp, nivel):
     if xp is None:
         return
@@ -103,7 +100,6 @@ def salvar_xp(nome, xp, nivel):
 
 # ================= XP =================
 
-# 🔥 RANK COM LV + XP
 def get_rank_xp():
     cur = conn.cursor()
     cur.execute("""
@@ -146,6 +142,53 @@ def get_evolucao(nome):
     simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
 
     return f"{simbolo} {nome}\nXP: {xp_hoje}\nVariação: {diff:+}"
+
+# ================= RANK GENÉRICO =================
+
+def gerar_rank(campo, titulo):
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT nome, {campo}
+        FROM status
+        WHERE data=%s
+        ORDER BY {campo} DESC
+    """, (hoje(),))
+
+    dados = cur.fetchall()
+
+    if not dados:
+        return f"Sem dados de {titulo} hoje."
+
+    texto = f"🏆 RANKING {titulo}\n\n"
+
+    for i, (nome, valor) in enumerate(dados, 1):
+        texto += f"{i}. {nome} — {valor}\n"
+
+    return texto
+
+# ================= COMANDOS RANK =================
+
+async def rank_atk(update, context):
+    await update.message.reply_text(gerar_rank("atk", "ATAQUE"))
+
+async def rank_def(update, context):
+    await update.message.reply_text(gerar_rank("def", "DEFESA"))
+
+async def rank_hp(update, context):
+    await update.message.reply_text(gerar_rank("hp", "HP"))
+
+async def rank_crit(update, context):
+    await update.message.reply_text(gerar_rank("crit", "CRÍTICO"))
+
+async def rank_gold(update, context):
+    await update.message.reply_text(gerar_rank("gold", "GOLD"))
+
+async def rank_tofus(update, context):
+    await update.message.reply_text(gerar_rank("tofus", "TOFUS"))
+
+async def rank_nivel(update, context):
+    await update.message.reply_text(gerar_rank("nivel", "NÍVEL"))
 
 # ================= PAINEL =================
 
@@ -251,7 +294,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     salvou = salvar_presenca(nome)
 
-    # 🔥 salva XP + nível sempre
     salvar_xp(nome, xp, nivel)
 
     if salvou:
@@ -269,12 +311,21 @@ def main():
     app.add_handler(CommandHandler("lista", comando_lista))
     app.add_handler(CommandHandler("xp", comando_xp))
 
+    # RANKS
+    app.add_handler(CommandHandler("atk", rank_atk))
+    app.add_handler(CommandHandler("def", rank_def))
+    app.add_handler(CommandHandler("hp", rank_hp))
+    app.add_handler(CommandHandler("crit", rank_crit))
+    app.add_handler(CommandHandler("gold", rank_gold))
+    app.add_handler(CommandHandler("tofu", rank_tofus))
+    app.add_handler(CommandHandler("level", rank_nivel))
+
     app.add_handler(MessageHandler(filters.ALL, detectar))
 
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.start()
 
-    print("🚀 Bot com XP + LEVEL rodando (VERSÃO FINAL)")
+    print("🚀 Bot FINAL com rankings rodando")
 
     app.run_polling(drop_pending_updates=True)
 
