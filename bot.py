@@ -54,13 +54,19 @@ def extrair_nivel(texto):
                 return int(numeros[0])
     return None
 
-# 🔥 EXTRAÇÃO COMPLETA DE STATUS
+# 🔥 EXTRAÇÃO DE STATUS CORRIGIDA (ANTI-BUFF)
 def extrair_status(texto):
     dados = {}
 
     for linha in texto.split("\n"):
+        linha = linha.strip()
 
-        if "ATK" in linha:
+        # ❌ IGNORA buffs tipo: "+5 ATK / +0 DEF / +0% CRIT"
+        if "/" in linha:
+            continue
+
+        # ✅ LINHA REAL DE STATUS
+        if "ATK" in linha and "DEF" in linha and "CRIT" in linha:
             numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
             if len(numeros) >= 3:
                 dados["atk"] = float(numeros[0])
@@ -127,7 +133,6 @@ def salvar_xp(nome, xp, nivel):
     """, (nome, xp, nivel, hoje()))
     conn.commit()
 
-# 🔥 SALVAR STATUS
 def salvar_status(nome, dados):
     if not dados:
         return
@@ -370,13 +375,12 @@ def main():
     app.add_handler(CommandHandler("tofu", rank_tofus))
     app.add_handler(CommandHandler("level", rank_nivel))
 
-    # 🔥 CORREÇÃO DO FILTER
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.start()
 
-    print("🚀 BOT FINAL COMPLETO (XP + STATUS + RANKS)")
+    print("🚀 BOT FINAL COMPLETO (ANTI-BUFF ATIVO)")
 
     app.run_polling(drop_pending_updates=True)
 
