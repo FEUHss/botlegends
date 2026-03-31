@@ -39,10 +39,20 @@ def extrair_nome(texto):
                 return limpar_nome(" ".join(partes[i + 1:]))
     return None
 
+# 🔥 EXTRAÇÃO XP CORRIGIDA
 def extrair_xp(texto):
     for linha in texto.split("\n"):
         if "XP" in linha:
-            numeros = re.findall(r"\d+", linha.replace(".", ""))
+            numeros = re.findall(r"\d+", linha.replace(".", "").replace(",", ""))
+            if len(numeros) >= 2:
+                return int(numeros[1])  # pega o XP correto
+    return None
+
+# 🔥 EXTRAÇÃO DE NÍVEL
+def extrair_nivel(texto):
+    for linha in texto.split("\n"):
+        if "Lv" in linha:
+            numeros = re.findall(r"\d+", linha)
             if numeros:
                 return int(numeros[0])
     return None
@@ -75,25 +85,29 @@ def salvar_presenca(nome):
     conn.commit()
     return True
 
-def salvar_xp(nome, xp):
+# 🔥 SALVAR XP + NÍVEL
+def salvar_xp(nome, xp, nivel):
     if xp is None:
         return
 
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO xp_logs (nome, xp, data)
-        VALUES (%s, %s, %s)
+        INSERT INTO xp_logs (nome, xp, nivel, data)
+        VALUES (%s, %s, %s, %s)
         ON CONFLICT (nome, data)
-        DO UPDATE SET xp = EXCLUDED.xp
-    """, (nome, xp, hoje()))
+        DO UPDATE SET 
+            xp = EXCLUDED.xp,
+            nivel = EXCLUDED.nivel
+    """, (nome, xp, nivel, hoje()))
     conn.commit()
 
 # ================= XP =================
 
+# 🔥 RANK COM LV + XP
 def get_rank_xp():
     cur = conn.cursor()
     cur.execute("""
-        SELECT nome, xp FROM xp_logs
+        SELECT nome, nivel, xp FROM xp_logs
         WHERE data=%s
         ORDER BY xp DESC
     """, (hoje(),))
@@ -104,8 +118,8 @@ def get_rank_xp():
         return "Sem dados de XP hoje."
 
     texto = "🏆 RANKING XP\n\n"
-    for i, (nome, xp) in enumerate(dados, 1):
-        texto += f"{i}. {nome} — {xp}\n"
+    for i, (nome, nivel, xp) in enumerate(dados, 1):
+        texto += f"{i}. {nome} — Lv {nivel} - {xp} XP\n"
 
     return texto
 
@@ -172,7 +186,7 @@ async def atualizar_painel(app):
         await app.bot.edit_message_text(
             chat_id=GRUPO_LIDERANCA,
             message_id=result[0],
-            text=gerar_texto_painel()
+            text=gerar_texto_painel() + f"\n\n🕒 Atualizado: {datetime.now(tz).strftime('%H:%M:%S')}"
         )
     except Exception as e:
         print("Erro painel:", e)
@@ -231,20 +245,20 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     xp = extrair_xp(texto)
+    nivel = extrair_nivel(texto)
 
     registrar_membro(nome)
 
     salvou = salvar_presenca(nome)
 
-    # 🔥 salva XP sempre
-    salvar_xp(nome, xp)
+    # 🔥 salva XP + nível sempre
+    salvar_xp(nome, xp, nivel)
 
     if salvou:
         await msg.reply_text(mensagem_pilar(nome))
     else:
         await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")
 
-    # 🔥 sempre atualiza painel
     await atualizar_painel(context.application)
 
 # ================= MAIN =================
@@ -260,10 +274,9 @@ def main():
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.start()
 
-    print("🚀 Bot com XP rodando (VERSÃO FINAL CORRIGIDA)")
+    print("🚀 Bot com XP + LEVEL rodando (VERSÃO FINAL)")
 
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
-
