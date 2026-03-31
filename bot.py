@@ -74,9 +74,9 @@ def extrair_status(texto):
                 dados["crit"] = float(numeros[2])
 
         elif "HP:" in linha:
-            numeros = re.findall(r"\d+", linha)
-            if numeros:
-                dados["hp"] = int(numeros[0])
+    numeros = re.findall(r"\d+", linha)
+    if len(numeros) >= 2:
+        dados["hp"] = int(numeros[1])  # 🔥 pega o HP MÁXIMO (correto)
 
         elif "Gold:" in linha:
             numeros = re.findall(r"\d+", linha)
