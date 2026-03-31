@@ -54,18 +54,17 @@ def extrair_nivel(texto):
                 return int(numeros[0])
     return None
 
-# 🔥 EXTRAÇÃO DE STATUS CORRIGIDA (ANTI-BUFF + HP FIX)
+# ================= STATUS =================
+
 def extrair_status(texto):
     dados = {}
 
     for linha in texto.split("\n"):
         linha = linha.strip()
 
-        # ❌ IGNORA buffs tipo: "+5 ATK / +0 DEF / +0% CRIT"
         if "/" in linha:
             continue
 
-        # ✅ LINHA REAL DE STATUS
         if "ATK" in linha and "DEF" in linha and "CRIT" in linha:
             numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
             if len(numeros) >= 3:
@@ -73,7 +72,6 @@ def extrair_status(texto):
                 dados["def"] = float(numeros[1])
                 dados["crit"] = float(numeros[2])
 
-        # 🔥 CORREÇÃO DO HP (pega o valor após /)
         elif "HP:" in linha:
             match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
             if match:
@@ -206,7 +204,7 @@ def get_evolucao(nome):
 
     return f"{simbolo} {nome}\nXP: {xp_hoje}\nVariação: {diff:+}"
 
-# ================= RANK =================
+# ================= RANK (CORRIGIDO) =================
 
 def gerar_rank(campo, titulo):
     cur = conn.cursor()
@@ -215,6 +213,7 @@ def gerar_rank(campo, titulo):
         SELECT nome, {campo}
         FROM status
         WHERE data=%s
+        AND {campo} IS NOT NULL
         ORDER BY {campo} DESC
     """, (hoje(),))
 
@@ -263,103 +262,6 @@ async def rank_tofus(update, context):
 async def rank_nivel(update, context):
     await update.message.reply_text(gerar_rank("nivel", "NÍVEL"))
 
-# ================= PAINEL =================
-
-def gerar_texto_painel():
-    cur = conn.cursor()
-
-    cur.execute("SELECT nome FROM membros")
-    membros = [m[0] for m in cur.fetchall()]
-
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje(),))
-    presentes = [p[0] for p in cur.fetchall()]
-
-    faltantes = sorted(set(membros) - set(presentes))
-    presentes = sorted(presentes)
-
-    texto = f"📜 PRESENÇA DA GUILDA — {hoje().strftime('%d/%m')}\n\n"
-
-    texto += "🟢 Presentes:\n"
-    texto += "\n".join([f"✅ {n}" for n in presentes]) if presentes else "Ninguém ainda"
-
-    texto += "\n\n🔴 Ausentes:\n"
-    texto += "\n".join([f"❌ {n}" for n in faltantes]) if faltantes else "Nenhum"
-
-    texto += f"\n\n📊 Total: {len(presentes)}/{len(membros)} membros"
-
-    return texto
-
-async def atualizar_painel(app):
-    cur = conn.cursor()
-    cur.execute("SELECT message_id FROM painel WHERE data=%s", (hoje(),))
-    result = cur.fetchone()
-
-    if not result:
-        await criar_painel(app)
-        return
-
-    await app.bot.edit_message_text(
-        chat_id=GRUPO_LIDERANCA,
-        message_id=result[0],
-        text=gerar_texto_painel() + f"\n\n🕒 Atualizado: {datetime.now(tz).strftime('%H:%M:%S')}"
-    )
-
-async def criar_painel(app):
-    msg = await app.bot.send_message(
-        chat_id=GRUPO_LIDERANCA,
-        text=gerar_texto_painel(),
-        message_thread_id=TOPICO_PAINEL
-    )
-
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO painel (data, message_id)
-        VALUES (%s,%s)
-        ON CONFLICT (data)
-        DO UPDATE SET message_id = EXCLUDED.message_id
-    """, (hoje(), msg.message_id))
-    conn.commit()
-
-# ================= DETECÇÃO =================
-
-async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-
-    if not msg:
-        return
-
-    if msg.chat.id != GRUPO_ID:
-        return
-
-    if msg.message_thread_id != TOPICO_PRESENCA:
-        return
-
-    texto = msg.text or msg.caption
-    if not texto:
-        return
-
-    nome = extrair_nome(texto)
-    if not nome:
-        return
-
-    xp = extrair_xp(texto)
-    nivel = extrair_nivel(texto)
-    dados = extrair_status(texto)
-
-    registrar_membro(nome)
-
-    salvou = salvar_presenca(nome)
-
-    salvar_xp(nome, xp, nivel)
-    salvar_status(nome, dados)
-
-    if salvou:
-        await msg.reply_text(mensagem_pilar(nome))
-    else:
-        await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")
-
-    await atualizar_painel(context.application)
-
 # ================= MAIN =================
 
 def main():
@@ -381,7 +283,7 @@ def main():
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.start()
 
-    print("🚀 BOT FINAL COMPLETO (ANTI-BUFF + HP FIX)")
+    print("🚀 BOT FINAL COMPLETO (RANK LIMPO + SEM NONE)")
 
     app.run_polling(drop_pending_updates=True)
 
