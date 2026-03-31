@@ -18,7 +18,6 @@ GRUPO_LIDERANCA = -1003806440152
 TOPICO_PAINEL = 116
 
 conn = psycopg2.connect(DATABASE_URL)
-
 tz = pytz.timezone("America/Sao_Paulo")
 
 # ================= DATA =================
@@ -54,6 +53,36 @@ def extrair_nivel(texto):
             if numeros:
                 return int(numeros[0])
     return None
+
+# 🔥 EXTRAÇÃO COMPLETA DE STATUS
+def extrair_status(texto):
+    dados = {}
+
+    for linha in texto.split("\n"):
+
+        if "ATK" in linha:
+            numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
+            if len(numeros) >= 3:
+                dados["atk"] = float(numeros[0])
+                dados["def"] = float(numeros[1])
+                dados["crit"] = float(numeros[2])
+
+        elif "HP:" in linha:
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                dados["hp"] = int(numeros[0])
+
+        elif "Gold:" in linha:
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                dados["gold"] = int(numeros[0])
+
+        elif "Tofus:" in linha:
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                dados["tofus"] = int(numeros[0])
+
+    return dados
 
 def mensagem_pilar(nome):
     return random.choice([
@@ -98,6 +127,36 @@ def salvar_xp(nome, xp, nivel):
     """, (nome, xp, nivel, hoje()))
     conn.commit()
 
+# 🔥 SALVAR STATUS
+def salvar_status(nome, dados):
+    if not dados:
+        return
+
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO status
+        (nome, data, atk, def, crit, hp, gold, tofus)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (nome, data)
+        DO UPDATE SET
+            atk=EXCLUDED.atk,
+            def=EXCLUDED.def,
+            crit=EXCLUDED.crit,
+            hp=EXCLUDED.hp,
+            gold=EXCLUDED.gold,
+            tofus=EXCLUDED.tofus
+    """, (
+        nome,
+        hoje(),
+        dados.get("atk"),
+        dados.get("def"),
+        dados.get("crit"),
+        dados.get("hp"),
+        dados.get("gold"),
+        dados.get("tofus"),
+    ))
+    conn.commit()
+
 # ================= XP =================
 
 def get_rank_xp():
@@ -121,7 +180,6 @@ def get_rank_xp():
 
 def get_evolucao(nome):
     cur = conn.cursor()
-
     cur.execute("""
         SELECT xp, data FROM xp_logs
         WHERE nome=%s
@@ -138,12 +196,11 @@ def get_evolucao(nome):
     xp_ontem, _ = dados[1]
 
     diff = xp_hoje - xp_ontem
-
     simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
 
     return f"{simbolo} {nome}\nXP: {xp_hoje}\nVariação: {diff:+}"
 
-# ================= RANK GENÉRICO =================
+# ================= RANK =================
 
 def gerar_rank(campo, titulo):
     cur = conn.cursor()
@@ -161,13 +218,23 @@ def gerar_rank(campo, titulo):
         return f"Sem dados de {titulo} hoje."
 
     texto = f"🏆 RANKING {titulo}\n\n"
-
     for i, (nome, valor) in enumerate(dados, 1):
         texto += f"{i}. {nome} — {valor}\n"
 
     return texto
 
-# ================= COMANDOS RANK =================
+# ================= COMANDOS =================
+
+async def comando_lista(update, context):
+    await update.message.reply_text(gerar_texto_painel())
+
+async def comando_xp(update, context):
+    args = context.args
+    if not args:
+        await update.message.reply_text(get_rank_xp())
+    else:
+        nome = limpar_nome(" ".join(args))
+        await update.message.reply_text(get_evolucao(nome))
 
 async def rank_atk(update, context):
     await update.message.reply_text(gerar_rank("atk", "ATAQUE"))
@@ -225,14 +292,11 @@ async def atualizar_painel(app):
         await criar_painel(app)
         return
 
-    try:
-        await app.bot.edit_message_text(
-            chat_id=GRUPO_LIDERANCA,
-            message_id=result[0],
-            text=gerar_texto_painel() + f"\n\n🕒 Atualizado: {datetime.now(tz).strftime('%H:%M:%S')}"
-        )
-    except Exception as e:
-        print("Erro painel:", e)
+    await app.bot.edit_message_text(
+        chat_id=GRUPO_LIDERANCA,
+        message_id=result[0],
+        text=gerar_texto_painel() + f"\n\n🕒 Atualizado: {datetime.now(tz).strftime('%H:%M:%S')}"
+    )
 
 async def criar_painel(app):
     msg = await app.bot.send_message(
@@ -249,20 +313,6 @@ async def criar_painel(app):
         DO UPDATE SET message_id = EXCLUDED.message_id
     """, (hoje(), msg.message_id))
     conn.commit()
-
-# ================= COMANDOS =================
-
-async def comando_lista(update, context):
-    await update.message.reply_text(gerar_texto_painel())
-
-async def comando_xp(update, context):
-    args = context.args
-
-    if not args:
-        await update.message.reply_text(get_rank_xp())
-    else:
-        nome = limpar_nome(" ".join(args))
-        await update.message.reply_text(get_evolucao(nome))
 
 # ================= DETECÇÃO =================
 
@@ -284,17 +334,18 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     nome = extrair_nome(texto)
     if not nome:
-        print("⚠️ Nome não identificado")
         return
 
     xp = extrair_xp(texto)
     nivel = extrair_nivel(texto)
+    dados = extrair_status(texto)
 
     registrar_membro(nome)
 
     salvou = salvar_presenca(nome)
 
     salvar_xp(nome, xp, nivel)
+    salvar_status(nome, dados)
 
     if salvou:
         await msg.reply_text(mensagem_pilar(nome))
@@ -311,7 +362,6 @@ def main():
     app.add_handler(CommandHandler("lista", comando_lista))
     app.add_handler(CommandHandler("xp", comando_xp))
 
-    # RANKS
     app.add_handler(CommandHandler("atk", rank_atk))
     app.add_handler(CommandHandler("def", rank_def))
     app.add_handler(CommandHandler("hp", rank_hp))
@@ -320,12 +370,13 @@ def main():
     app.add_handler(CommandHandler("tofu", rank_tofus))
     app.add_handler(CommandHandler("level", rank_nivel))
 
-    app.add_handler(MessageHandler(filters.ALL, detectar))
+    # 🔥 CORREÇÃO DO FILTER
+    app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.start()
 
-    print("🚀 Bot FINAL com rankings rodando")
+    print("🚀 BOT FINAL COMPLETO (XP + STATUS + RANKS)")
 
     app.run_polling(drop_pending_updates=True)
 
