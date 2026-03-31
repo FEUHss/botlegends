@@ -6,16 +6,12 @@ import re
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
-
-GRUPO_LIDERANCA = -1003806440152
-TOPICO_PAINEL = 116
 
 conn = psycopg2.connect(DATABASE_URL)
 tz = pytz.timezone("America/Sao_Paulo")
@@ -54,17 +50,18 @@ def extrair_nivel(texto):
                 return int(numeros[0])
     return None
 
-# 🔥 EXTRAÇÃO STATUS FINAL (ANTI-BUFF + HP CORRETO)
+# 🔥 EXTRAÇÃO STATUS FINAL CORRIGIDA
 def extrair_status(texto):
     dados = {}
 
     for linha in texto.split("\n"):
         linha = linha.strip()
 
-        # ignora buffs
-        if linha.startswith("+") or "/" in linha:
+        # ❌ IGNORA APENAS BUFF
+        if linha.startswith("+"):
             continue
 
+        # ✅ STATUS PRINCIPAL
         if "ATK" in linha and "DEF" in linha and "CRIT" in linha:
             numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
             if len(numeros) >= 3:
@@ -72,10 +69,11 @@ def extrair_status(texto):
                 dados["def"] = float(numeros[1])
                 dados["crit"] = float(numeros[2])
 
+        # 🔥 HP CORRETO (SEGUNDO VALOR)
         elif "HP:" in linha:
             match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
             if match:
-                dados["hp"] = int(match.group(2))  # 🔥 HP TOTAL
+                dados["hp"] = int(match.group(2))
 
         elif "Gold:" in linha:
             numeros = re.findall(r"\d+", linha)
@@ -90,14 +88,7 @@ def extrair_status(texto):
     return dados
 
 def mensagem_pilar(nome):
-    return random.choice([
-        f"📜 O Pilar registra: {nome} esteve presente.",
-        f"🗿 O Pilar reconhece {nome}.",
-        f"✨ Presença registrada: {nome}.",
-        f"👑 {nome} marcado no Pilar.",
-        f"🔥 Presença de {nome} confirmada.",
-        f"⚡ Registrado: {nome}"
-    ])
+    return f"📜 Presença registrada: {nome}"
 
 # ================= BANCO =================
 
@@ -181,51 +172,6 @@ def gerar_rank(campo, titulo):
 
     return texto
 
-# ================= XP =================
-
-def get_rank_xp():
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT nome, nivel, xp FROM xp_logs
-        WHERE data=%s
-        ORDER BY xp DESC
-    """, (hoje(),))
-
-    dados = cur.fetchall()
-
-    if not dados:
-        return "Sem dados de XP hoje."
-
-    texto = "🏆 RANKING XP\n\n"
-    for i, (nome, nivel, xp) in enumerate(dados, 1):
-        texto += f"{i}. {nome} — Lv {nivel} - {xp} XP\n"
-
-    return texto
-
-# ================= PAINEL =================
-
-def gerar_texto_painel():
-    cur = conn.cursor()
-
-    cur.execute("SELECT nome FROM membros")
-    membros = [m[0] for m in cur.fetchall()]
-
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje(),))
-    presentes = [p[0] for p in cur.fetchall()]
-
-    faltantes = sorted(set(membros) - set(presentes))
-    presentes = sorted(presentes)
-
-    texto = f"📜 PRESENÇA — {hoje().strftime('%d/%m')}\n\n"
-    texto += "🟢 Presentes:\n"
-    texto += "\n".join([f"✅ {n}" for n in presentes]) if presentes else "Ninguém"
-
-    texto += "\n\n🔴 Ausentes:\n"
-    texto += "\n".join([f"❌ {n}" for n in faltantes]) if faltantes else "Nenhum"
-
-    texto += f"\n\n📊 {len(presentes)}/{len(membros)} membros"
-    return texto
-
 # ================= DETECÇÃO =================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -250,6 +196,8 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nivel = extrair_nivel(texto)
     dados = extrair_status(texto)
 
+    print("DEBUG STATUS:", dados)  # 👈 ajuda se der problema
+
     registrar_membro(nome)
 
     salvou = salvar_presenca(nome)
@@ -267,7 +215,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("xp", lambda u,c: u.message.reply_text(get_rank_xp())))
     app.add_handler(CommandHandler("atk", lambda u,c: u.message.reply_text(gerar_rank("atk","ATAQUE"))))
     app.add_handler(CommandHandler("def", lambda u,c: u.message.reply_text(gerar_rank("def","DEFESA"))))
     app.add_handler(CommandHandler("hp", lambda u,c: u.message.reply_text(gerar_rank("hp","HP"))))
@@ -277,7 +224,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL ESTÁVEL")
+    print("🚀 BOT FINAL CORRIGIDO (HP + STATUS OK)")
 
     app.run_polling(drop_pending_updates=True)
 
