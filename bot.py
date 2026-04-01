@@ -277,24 +277,32 @@ async def comando_xp(update, context):
         nome = limpar_nome(" ".join(args))  
         await update.message.reply_text(get_evolucao(nome))  
 
-# ================= RANK (🔥 NOVO SISTEMA PERSISTENTE) =================  
+# ================= RANK (🔥 SISTEMA HÍBRIDO FINAL) =================  
 
 def gerar_rank(campo, titulo):
     cur = conn.cursor()
 
     cur.execute(f"""
-        SELECT DISTINCT ON (nome) nome, {campo}
-        FROM status
-        WHERE {campo} IS NOT NULL
-        ORDER BY nome, data DESC
+        SELECT s.nome, s.{campo}
+        FROM status s
+        INNER JOIN (
+            SELECT nome,
+                   COALESCE(
+                       MAX(CASE WHEN data = CURRENT_DATE THEN data END),
+                       MAX(data)
+                   ) as data_ref
+            FROM status
+            GROUP BY nome
+        ) ref
+        ON s.nome = ref.nome AND s.data = ref.data_ref
+        WHERE s.{campo} IS NOT NULL
+        ORDER BY s.{campo} DESC
     """)
 
     dados = cur.fetchall()
 
     if not dados:
         return f"Sem dados de {titulo}."
-
-    dados = sorted(dados, key=lambda x: x[1], reverse=True)
 
     texto = f"🏆 RANKING {titulo}\n\n"
     for i, (nome, valor) in enumerate(dados, 1):
