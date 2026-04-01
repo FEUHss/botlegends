@@ -13,8 +13,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
 
+# 🔥 VOLTOU
+GRUPO_LIDERANCA = -1003806440152
+TOPICO_PAINEL = 116
+
 conn = psycopg2.connect(DATABASE_URL)
 tz = pytz.timezone("America/Sao_Paulo")
+
+painel_msg_id = None  # guarda mensagem fixa
 
 # ================= DATA =================
 
@@ -92,7 +98,8 @@ def extrair_status(texto):
 
     return dados
 
-# 🔥 FRASES DO PILAR RESTAURADAS
+# ================= FRASES =================
+
 def mensagem_pilar(nome):
     frases = [
         f"📜 O Pilar registra: {nome} esteve presente.",
@@ -179,7 +186,6 @@ def gerar_texto_painel():
     presentes = sorted(presentes)
 
     texto = f"📜 PRESENÇA — {hoje().strftime('%d/%m')}\n\n"
-
     texto += "🟢 Presentes:\n"
     texto += "\n".join([f"✅ {n}" for n in presentes]) if presentes else "Ninguém"
 
@@ -189,6 +195,30 @@ def gerar_texto_painel():
     texto += f"\n\n📊 {len(presentes)}/{len(membros)} membros"
 
     return texto
+
+# 🔥 PAINEL FIXO
+async def atualizar_painel(app):
+    global painel_msg_id
+
+    texto = gerar_texto_painel()
+
+    try:
+        if painel_msg_id:
+            await app.bot.edit_message_text(
+                chat_id=GRUPO_LIDERANCA,
+                message_id=painel_msg_id,
+                text=texto,
+            )
+        else:
+            msg = await app.bot.send_message(
+                chat_id=GRUPO_LIDERANCA,
+                text=texto,
+                message_thread_id=TOPICO_PAINEL
+            )
+            painel_msg_id = msg.message_id
+
+    except Exception as e:
+        print("Erro painel:", e)
 
 async def comando_lista(update, context):
     await update.message.reply_text(gerar_texto_painel())
@@ -214,8 +244,56 @@ def get_rank_xp():
 
     return texto
 
+def get_evolucao(nome):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT xp FROM xp_logs
+        WHERE nome=%s
+        ORDER BY data DESC
+        LIMIT 2
+    """, (nome,))
+
+    dados = cur.fetchall()
+
+    if len(dados) < 2:
+        return f"Dados insuficientes para evolução de {nome}"
+
+    diff = dados[0][0] - dados[1][0]
+    simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
+
+    return f"{simbolo} {nome}\nXP atual: {dados[0][0]}\nVariação: {diff:+}"
+
 async def comando_xp(update, context):
-    await update.message.reply_text(get_rank_xp())
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(get_rank_xp())
+    else:
+        nome = limpar_nome(" ".join(args))
+        await update.message.reply_text(get_evolucao(nome))
+
+# ================= RANK =================
+
+def gerar_rank(campo, titulo):
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT nome, {campo}
+        FROM status
+        WHERE data=%s AND {campo} IS NOT NULL
+        ORDER BY {campo} DESC
+    """, (hoje(),))
+
+    dados = cur.fetchall()
+
+    if not dados:
+        return f"Sem dados de {titulo} hoje."
+
+    texto = f"🏆 RANKING {titulo}\n\n"
+    for i, (nome, valor) in enumerate(dados, 1):
+        texto += f"{i}. {nome} — {valor}\n"
+
+    return texto
 
 # ================= DETECÇÃO =================
 
@@ -223,10 +301,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
     if not msg:
-        return
-    if msg.chat.id != GRUPO_ID:
-        return
-    if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
     texto = msg.text or msg.caption
@@ -252,8 +326,8 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")
 
-    # 🔥 Atualiza lista em tempo real
-    await msg.reply_text(gerar_texto_painel())
+    # 🔥 atualiza painel SEM SPAM
+    await atualizar_painel(context.application)
 
 # ================= MAIN =================
 
@@ -272,7 +346,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL (PILAR COMPLETO + LISTA + XP + STATUS)")
+    print("🚀 BOT FINAL COM PAINEL FIXO ATIVO")
 
     app.run_polling(drop_pending_updates=True)
 
