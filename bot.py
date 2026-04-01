@@ -20,6 +20,7 @@ conn = psycopg2.connect(DATABASE_URL)
 tz = pytz.timezone("America/Sao_Paulo")
 
 painel_msg_id = None
+painel_data = None  # 🔥 controle de dia
 
 # ================= DATA =================
 
@@ -195,25 +196,31 @@ def gerar_texto_painel():
 
     return texto
 
+# 🔥 PAINEL CORRIGIDO
 async def atualizar_painel(app):
-    global painel_msg_id
+    global painel_msg_id, painel_data
 
+    hoje_data = hoje()
     texto = gerar_texto_painel()
 
+    hora = datetime.now(tz).strftime("%H:%M:%S")
+    texto += f"\n\n🕒 Atualizado: {hora}"
+
     try:
-        if painel_msg_id:
-            await app.bot.edit_message_text(
-                chat_id=GRUPO_LIDERANCA,
-                message_id=painel_msg_id,
-                text=texto,
-            )
-        else:
+        if painel_data != hoje_data:
             msg = await app.bot.send_message(
                 chat_id=GRUPO_LIDERANCA,
                 text=texto,
                 message_thread_id=TOPICO_PAINEL
             )
             painel_msg_id = msg.message_id
+            painel_data = hoje_data
+        else:
+            await app.bot.edit_message_text(
+                chat_id=GRUPO_LIDERANCA,
+                message_id=painel_msg_id,
+                text=texto,
+            )
 
     except Exception as e:
         print("Erro painel:", e)
@@ -293,7 +300,7 @@ def gerar_rank(campo, titulo):
 
     return texto
 
-# ================= DETECÇÃO (CORRIGIDO) =================
+# ================= DETECÇÃO =================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -301,7 +308,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # 🔥 FILTRO CORRIGIDO
     if msg.chat.id != GRUPO_ID:
         return
 
@@ -350,7 +356,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL COM PAINEL FIXO ATIVO (FILTRO CORRIGIDO)")
+    print("🚀 BOT FINAL COM PAINEL DIÁRIO + HORÁRIO")
 
     app.run_polling(drop_pending_updates=True)
 
