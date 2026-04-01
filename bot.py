@@ -13,14 +13,13 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
 
-# 🔥 VOLTOU
 GRUPO_LIDERANCA = -1003806440152
 TOPICO_PAINEL = 116
 
 conn = psycopg2.connect(DATABASE_URL)
 tz = pytz.timezone("America/Sao_Paulo")
 
-painel_msg_id = None  # guarda mensagem fixa
+painel_msg_id = None
 
 # ================= DATA =================
 
@@ -196,7 +195,6 @@ def gerar_texto_painel():
 
     return texto
 
-# 🔥 PAINEL FIXO
 async def atualizar_painel(app):
     global painel_msg_id
 
@@ -295,12 +293,19 @@ def gerar_rank(campo, titulo):
 
     return texto
 
-# ================= DETECÇÃO =================
+# ================= DETECÇÃO (CORRIGIDO) =================
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
     if not msg:
+        return
+
+    # 🔥 FILTRO CORRIGIDO
+    if msg.chat.id != GRUPO_ID:
+        return
+
+    if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
     texto = msg.text or msg.caption
@@ -326,7 +331,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")
 
-    # 🔥 atualiza painel SEM SPAM
     await atualizar_painel(context.application)
 
 # ================= MAIN =================
@@ -346,7 +350,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL COM PAINEL FIXO ATIVO")
+    print("🚀 BOT FINAL COM PAINEL FIXO ATIVO (FILTRO CORRIGIDO)")
 
     app.run_polling(drop_pending_updates=True)
 
