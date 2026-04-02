@@ -171,146 +171,6 @@ def salvar_status(nome, dados):
     ))
     conn.commit()
 
-# ================= LISTA =================
-
-def gerar_texto_painel():
-    cur = conn.cursor()
-
-    cur.execute("SELECT nome FROM membros")
-    membros = [m[0] for m in cur.fetchall()]
-
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje(),))
-    presentes = [p[0] for p in cur.fetchall()]
-
-    faltantes = sorted(set(membros) - set(presentes))
-    presentes = sorted(presentes)
-
-    texto = f"📜 PRESENÇA — {hoje().strftime('%d/%m')}\n\n"
-    texto += "🟢 Presentes:\n"
-    texto += "\n".join([f"✅ {n}" for n in presentes]) if presentes else "Ninguém"
-
-    texto += "\n\n🔴 Ausentes:\n"
-    texto += "\n".join([f"❌ {n}" for n in faltantes]) if faltantes else "Nenhum"
-
-    texto += f"\n\n📊 {len(presentes)}/{len(membros)} membros"
-
-    return texto
-
-# ================= PAINEL =================
-
-async def atualizar_painel(app):
-    global painel_msg_id, painel_data
-
-    hoje_data = hoje()
-    texto = gerar_texto_painel()
-
-    hora = datetime.now(tz).strftime("%H:%M:%S")
-    texto += f"\n\n🕒 Atualizado: {hora}"
-
-    try:
-        if painel_data != hoje_data:
-            msg = await app.bot.send_message(
-                chat_id=GRUPO_LIDERANCA,
-                text=texto,
-                message_thread_id=TOPICO_PAINEL
-            )
-            painel_msg_id = msg.message_id
-            painel_data = hoje_data
-        else:
-            await app.bot.edit_message_text(
-                chat_id=GRUPO_LIDERANCA,
-                message_id=painel_msg_id,
-                text=texto,
-            )
-
-    except Exception as e:
-        print("Erro painel:", e)
-
-async def comando_lista(update, context):
-    await update.message.reply_text(gerar_texto_painel())
-
-# ================= XP =================
-
-def get_rank_xp():
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT nome, nivel, xp FROM xp_logs
-        WHERE data=%s
-        ORDER BY xp DESC
-    """, (hoje(),))
-
-    dados = cur.fetchall()
-
-    if not dados:
-        return "Sem dados de XP hoje."
-
-    texto = "🏆 RANKING XP\n\n"
-    for i, (nome, nivel, xp) in enumerate(dados, 1):
-        texto += f"{i}. {nome} — Lv {nivel} - {xp} XP\n"
-
-    return texto
-
-def get_evolucao(nome):
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT xp FROM xp_logs
-        WHERE nome=%s
-        ORDER BY data DESC
-        LIMIT 2
-    """, (nome,))
-
-    dados = cur.fetchall()
-
-    if len(dados) < 2:
-        return f"Dados insuficientes para evolução de {nome}"
-
-    diff = dados[0][0] - dados[1][0]
-    simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
-
-    return f"{simbolo} {nome}\nXP atual: {dados[0][0]}\nVariação: {diff:+}"
-
-async def comando_xp(update, context):
-    args = context.args
-
-    if not args:
-        await update.message.reply_text(get_rank_xp())
-    else:
-        nome = limpar_nome(" ".join(args))
-        await update.message.reply_text(get_evolucao(nome))
-
-# ================= RANK =================
-
-def gerar_rank(campo, titulo):
-    cur = conn.cursor()
-
-    cur.execute(f"""
-        SELECT s.nome, s.{campo}
-        FROM status s
-        INNER JOIN (
-            SELECT nome,
-                   COALESCE(
-                       MAX(CASE WHEN data = CURRENT_DATE THEN data END),
-                       MAX(data)
-                   ) as data_ref
-            FROM status
-            GROUP BY nome
-        ) ref
-        ON s.nome = ref.nome AND s.data = ref.data_ref
-        WHERE s.{campo} IS NOT NULL
-        ORDER BY s.{campo} DESC
-    """)
-
-    dados = cur.fetchall()
-
-    if not dados:
-        return f"Sem dados de {titulo}."
-
-    texto = f"🏆 RANKING {titulo}\n\n"
-    for i, (nome, valor) in enumerate(dados, 1):
-        texto += f"{i}. {nome} — {valor}\n"
-
-    return texto
-
 # ================= WIKI =================
 
 def salvar_monstro(nome, hp):
@@ -341,6 +201,7 @@ def buscar_monstro(nome):
     """, (nome,))
     return cur.fetchone()
 
+# 🔥 CORREÇÃO AQUI (GENÉRICA)
 def extrair_monstro(texto):
     nome = None
     hp = None
@@ -348,12 +209,19 @@ def extrair_monstro(texto):
     for linha in texto.split("\n"):
         linha = linha.strip()
 
+        # HP
         if "HP" in linha:
             numeros = re.findall(r"\d+", linha)
             if numeros:
                 hp = int(numeros[-1])
 
-        if not nome and len(linha) < 25 and not any(x in linha for x in ["COMBATE", "Você", "Energia"]):
+        # Nome do monstro (linha limpa, sem números e sem palavras do player)
+        if (
+            not nome
+            and len(linha) < 30
+            and not any(p in linha.lower() for p in ["combate", "você", "energia", "turno"])
+            and not re.search(r"\d", linha)
+        ):
             nome = linha.upper()
 
     return nome, hp
@@ -362,9 +230,6 @@ async def detectar_privado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
     if not msg:
-        return
-
-    if msg.chat.type != "private":
         return
 
     texto = msg.text or msg.caption
@@ -396,10 +261,6 @@ async def comando_addmob(update, context):
         await update.message.reply_text("Uso:\n/addmob Nome XP GOLD tipo mapa")
 
 async def comando_mob(update, context):
-    if not context.args:
-        await update.message.reply_text("Use:\n/mob nome")
-        return
-
     nome = limpar_nome(" ".join(context.args))
     dados = buscar_monstro(nome)
 
@@ -422,69 +283,22 @@ async def comando_mob(update, context):
 
     await update.message.reply_text(texto)
 
-# ================= DETECÇÃO =================
-
-async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-
-    if not msg:
-        return
-
-    if msg.chat.id != GRUPO_ID:
-        return
-
-    if msg.message_thread_id != TOPICO_PRESENCA:
-        return
-
-    texto = msg.text or msg.caption
-    if not texto:
-        return
-
-    nome = extrair_nome(texto)
-    if not nome:
-        return
-
-    xp = extrair_xp(texto)
-    nivel = extrair_nivel(texto)
-    dados = extrair_status(texto)
-
-    registrar_membro(nome)
-    salvou = salvar_presenca(nome)
-
-    salvar_xp(nome, xp, nivel)
-    salvar_status(nome, dados)
-
-    if salvou:
-        await msg.reply_text(mensagem_pilar(nome))
-    else:
-        await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")
-
-    await atualizar_painel(context.application)
-
 # ================= MAIN =================
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("xp", comando_xp))
-    app.add_handler(CommandHandler("lista", comando_lista))
-
-    app.add_handler(CommandHandler("atk", lambda u,c: u.message.reply_text(gerar_rank("atk","ATAQUE"))))
-    app.add_handler(CommandHandler("def", lambda u,c: u.message.reply_text(gerar_rank("def","DEFESA"))))
-    app.add_handler(CommandHandler("hp", lambda u,c: u.message.reply_text(gerar_rank("hp","HP"))))
-    app.add_handler(CommandHandler("crit", lambda u,c: u.message.reply_text(gerar_rank("crit","CRÍTICO"))))
-    app.add_handler(CommandHandler("gold", lambda u,c: u.message.reply_text(gerar_rank("gold","GOLD"))))
-    app.add_handler(CommandHandler("tofu", lambda u,c: u.message.reply_text(gerar_rank("tofus","TOFUS"))))
-
-    # WIKI (PRIVADO)
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE, detectar_privado))
     app.add_handler(CommandHandler("addmob", comando_addmob))
     app.add_handler(CommandHandler("mob", comando_mob))
 
-    # SISTEMA PRINCIPAL (GRUPO)
-    app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
+    app.add_handler(
+        MessageHandler(
+            (filters.TEXT | filters.CaptionRegex(".*")) & filters.ChatType.PRIVATE,
+            detectar_privado
+        )
+    )
 
-    print("🚀 BOT FINAL COMPLETO COM WIKI + PRESENÇA + RANK")
+    print("🚀 BOT COM WIKI FUNCIONANDO")
 
     app.run_polling(drop_pending_updates=True)
 
