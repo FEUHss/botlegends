@@ -229,7 +229,7 @@ async def atualizar_painel(app):
 async def comando_lista(update, context):  
     await update.message.reply_text(gerar_texto_painel())  
 
-# ================= XP (CORRIGIDO) =================  
+# ================= XP =================  
 
 def get_rank_xp():  
     cur = conn.cursor()  
@@ -260,12 +260,16 @@ def get_rank_xp():
 
     return texto  
 
+# ✅ CORREÇÃO FINAL DO XPDIF
 def get_rank_xp_dif():
     cur = conn.cursor()
 
     cur.execute("""
         SELECT m.nome,
-               COALESCE(hoje.xp, 0) - COALESCE(ontem.xp, COALESCE(hoje.xp, 0)) as diff
+               CASE 
+                   WHEN hoje.xp IS NULL THEN 0
+                   ELSE hoje.xp - COALESCE(ontem.xp, hoje.xp)
+               END as diff
         FROM membros m
 
         LEFT JOIN (
