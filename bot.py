@@ -16,6 +16,10 @@ TOPICO_PRESENCA = 16325
 GRUPO_LIDERANCA = -1003806440152  
 TOPICO_PAINEL = 116  
 
+# 🔥 BANCO
+TOPICO_BANCO = 30933
+ADMIN_ID = 5285053532
+
 conn = psycopg2.connect(DATABASE_URL)  
 tz = pytz.timezone("America/Sao_Paulo")  
 
@@ -101,16 +105,15 @@ def extrair_status(texto):
 # ================= FRASES =================  
 
 def mensagem_pilar(nome):  
-    frases = [  
-        f"📜 O Pilar registra: {nome} esteve presente.",  
-        f"🗿 O Pilar da Sabedoria reconhece {nome}.",  
-        f"✨ A presença de {nome} foi gravada no Pilar.",  
-        f"👑 O Pilar eterniza: {nome} marcou presença.",  
-        f"🔥 Feixes dourados registram a presença de {nome}.",  
-        f"🧠 O conhecimento do Pilar agora carrega o nome de {nome}.",  
-        f"⚡ Registrado: {nome}"  
-    ]  
-    return random.choice(frases)  
+    return random.choice([
+        f"📜 O Pilar registra: {nome} esteve presente.",
+        f"🗿 O Pilar reconhece {nome}.",
+        f"✨ Presença registrada: {nome}",
+        f"👑 {nome} marcou presença.",
+        f"🔥 Presença de {nome} confirmada.",
+        f"🧠 {nome} foi registrado.",
+        f"⚡ Registrado: {nome}"
+    ])
 
 # ================= BANCO =================  
 
@@ -132,301 +135,181 @@ def salvar_presenca(nome):
 def salvar_xp(nome, xp, nivel):  
     if xp is None:  
         return  
-
     cur = conn.cursor()  
     cur.execute("""  
-        INSERT INTO xp_logs (nome, xp, nivel, data)  
-        VALUES (%s, %s, %s, %s)  
-        ON CONFLICT (nome, data)  
-        DO UPDATE SET xp = EXCLUDED.xp, nivel = EXCLUDED.nivel  
+        INSERT INTO xp_logs (nome, xp, nivel, data)
+        VALUES (%s,%s,%s,%s)
+        ON CONFLICT (nome,data)
+        DO UPDATE SET xp=EXCLUDED.xp, nivel=EXCLUDED.nivel
     """, (nome, xp, nivel, hoje()))  
     conn.commit()  
 
 def salvar_status(nome, dados):  
-    if not dados:  
-        return  
-
+    if not dados: return  
     cur = conn.cursor()  
     cur.execute("""  
-        INSERT INTO status  
-        (nome, data, atk, def, crit, hp, gold, tofus)  
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)  
-        ON CONFLICT (nome, data)  
-        DO UPDATE SET  
-            atk=EXCLUDED.atk,  
-            def=EXCLUDED.def,  
-            crit=EXCLUDED.crit,  
-            hp=EXCLUDED.hp,  
-            gold=EXCLUDED.gold,  
-            tofus=EXCLUDED.tofus  
-    """, (  
-        nome,  
-        hoje(),  
-        dados.get("atk"),  
-        dados.get("def"),  
-        dados.get("crit"),  
-        dados.get("hp"),  
-        dados.get("gold"),  
-        dados.get("tofus"),  
-    ))  
-    conn.commit()  
-
-# ================= LISTA =================  
-
-def gerar_texto_painel():  
-    cur = conn.cursor()  
-
-    cur.execute("SELECT nome FROM membros")  
-    membros = [m[0] for m in cur.fetchall()]  
-
-    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje(),))  
-    presentes = [p[0] for p in cur.fetchall()]  
-
-    faltantes = sorted(set(membros) - set(presentes))  
-    presentes = sorted(presentes)  
-
-    texto = f"📜 PRESENÇA — {hoje().strftime('%d/%m')}\n\n"  
-    texto += "🟢 Presentes:\n"  
-    texto += "\n".join([f"✅ {n}" for n in presentes]) if presentes else "Ninguém"  
-
-    texto += "\n\n🔴 Ausentes:\n"  
-    texto += "\n".join([f"❌ {n}" for n in faltantes]) if faltantes else "Nenhum"  
-
-    texto += f"\n\n📊 {len(presentes)}/{len(membros)} membros"  
-
-    return texto  
-
-# ================= PAINEL =================  
-
-async def atualizar_painel(app):  
-    global painel_msg_id, painel_data  
-
-    hoje_data = hoje()  
-    texto = gerar_texto_painel()  
-
-    hora = datetime.now(tz).strftime("%H:%M:%S")  
-    texto += f"\n\n🕒 Atualizado: {hora}"  
-
-    try:  
-        if painel_data != hoje_data:  
-            msg = await app.bot.send_message(  
-                chat_id=GRUPO_LIDERANCA,  
-                text=texto,  
-                message_thread_id=TOPICO_PAINEL  
-            )  
-            painel_msg_id = msg.message_id  
-            painel_data = hoje_data  
-        else:  
-            await app.bot.edit_message_text(  
-                chat_id=GRUPO_LIDERANCA,  
-                message_id=painel_msg_id,  
-                text=texto,  
-            )  
-
-    except Exception as e:  
-        print("Erro painel:", e)  
-
-async def comando_lista(update, context):  
-    await update.message.reply_text(gerar_texto_painel())  
+        INSERT INTO status (nome,data,atk,def,crit,hp,gold,tofus)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (nome,data)
+        DO UPDATE SET atk=EXCLUDED.atk,def=EXCLUDED.def,crit=EXCLUDED.crit,
+        hp=EXCLUDED.hp,gold=EXCLUDED.gold,tofus=EXCLUDED.tofus
+    """, (nome,hoje(),dados.get("atk"),dados.get("def"),
+          dados.get("crit"),dados.get("hp"),
+          dados.get("gold"),dados.get("tofus")))
+    conn.commit()
 
 # ================= XP =================  
 
-def get_rank_xp():  
-    cur = conn.cursor()  
-    cur.execute("""  
-        SELECT x.nome, x.nivel, x.xp
+def get_rank_xp():
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT x.nome,x.nivel,x.xp
         FROM xp_logs x
         INNER JOIN (
-            SELECT nome,
-                   COALESCE(
-                       MAX(CASE WHEN data = CURRENT_DATE THEN data END),
-                       MAX(data)
-                   ) as data_ref
-            FROM xp_logs
-            GROUP BY nome
+            SELECT nome, MAX(data) as data_ref
+            FROM xp_logs GROUP BY nome
         ) ref
-        ON x.nome = ref.nome AND x.data = ref.data_ref
+        ON x.nome=ref.nome AND x.data=ref.data_ref
         ORDER BY x.xp DESC
-    """)  
-
-    dados = cur.fetchall()  
-
-    if not dados:  
-        return "Sem dados de XP."  
-
-    texto = "🏆 RANKING XP\n\n"  
-    for i, (nome, nivel, xp) in enumerate(dados, 1):  
-        texto += f"{i}. {nome} — Lv {nivel} - {xp} XP\n"  
-
-    return texto  
-
-# ✅ CORREÇÃO FINAL DO XPDIF
-def get_rank_xp_dif():
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT m.nome,
-               CASE 
-                   WHEN hoje.xp IS NULL THEN 0
-                   ELSE hoje.xp - COALESCE(ontem.xp, hoje.xp)
-               END as diff
-        FROM membros m
-
-        LEFT JOIN (
-            SELECT nome, xp
-            FROM xp_logs
-            WHERE data = CURRENT_DATE
-        ) hoje ON m.nome = hoje.nome
-
-        LEFT JOIN (
-            SELECT x1.nome, x1.xp
-            FROM xp_logs x1
-            INNER JOIN (
-                SELECT nome, MAX(data) as data
-                FROM xp_logs
-                WHERE data < CURRENT_DATE
-                GROUP BY nome
-            ) x2
-            ON x1.nome = x2.nome AND x1.data = x2.data
-        ) ontem ON m.nome = ontem.nome
-
-        ORDER BY diff DESC
     """)
-
     dados = cur.fetchall()
 
-    texto = "📊 VARIAÇÃO XP (24h)\n\n"
-
-    for i, (nome, diff) in enumerate(dados, 1):
-        simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
-        texto += f"{i}. {nome} — {simbolo} {diff:+}\n"
-
+    texto = "🏆 RANKING XP\n\n"
+    for i,(n,l,xp) in enumerate(dados,1):
+        texto += f"{i}. {n} — Lv {l} - {xp} XP\n"
     return texto
 
-async def comando_xpdif(update, context):
-    await update.message.reply_text(get_rank_xp_dif())
-
-def get_evolucao(nome):  
-    cur = conn.cursor()  
-    cur.execute("""  
-        SELECT xp FROM xp_logs  
-        WHERE nome=%s  
-        ORDER BY data DESC  
-        LIMIT 2  
-    """, (nome,))  
-
-    dados = cur.fetchall()  
-
-    if len(dados) < 2:  
-        return f"Dados insuficientes para evolução de {nome}"  
-
-    diff = dados[0][0] - dados[1][0]  
-    simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"  
-
-    return f"{simbolo} {nome}\nXP atual: {dados[0][0]}\nVariação: {diff:+}"  
-
-async def comando_xp(update, context):  
-    args = context.args  
-
-    if not args:  
-        await update.message.reply_text(get_rank_xp())  
-    else:  
-        nome = limpar_nome(" ".join(args))  
-        await update.message.reply_text(get_evolucao(nome))  
+def get_evolucao(nome):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT xp FROM xp_logs
+        WHERE nome=%s ORDER BY data DESC LIMIT 2
+    """,(nome,))
+    d=cur.fetchall()
+    if len(d)<2: return "Dados insuficientes"
+    diff=d[0][0]-d[1][0]
+    return f"{nome}\nXP atual: {d[0][0]}\nVariação: {diff:+}"
 
 # ================= RANK =================  
 
-def gerar_rank(campo, titulo):
-    cur = conn.cursor()
-
+def gerar_rank(campo,titulo):
+    cur=conn.cursor()
     cur.execute(f"""
-        SELECT s.nome, s.{campo}
+        SELECT s.nome,s.{campo}
         FROM status s
         INNER JOIN (
-            SELECT nome,
-                   COALESCE(
-                       MAX(CASE WHEN data = CURRENT_DATE THEN data END),
-                       MAX(data)
-                   ) as data_ref
-            FROM status
-            GROUP BY nome
+            SELECT nome,MAX(data) as data_ref
+            FROM status GROUP BY nome
         ) ref
-        ON s.nome = ref.nome AND s.data = ref.data_ref
-        WHERE s.{campo} IS NOT NULL
+        ON s.nome=ref.nome AND s.data=ref.data_ref
         ORDER BY s.{campo} DESC
     """)
+    dados=cur.fetchall()
+    txt=f"🏆 {titulo}\n\n"
+    for i,(n,v) in enumerate(dados,1):
+        txt+=f"{i}. {n} — {v}\n"
+    return txt
 
-    dados = cur.fetchall()
+# ================= XPDIF =================  
 
-    if not dados:
-        return f"Sem dados de {titulo}."
+def get_rank_xp_dif():
+    cur=conn.cursor()
+    cur.execute("""
+        SELECT m.nome,
+        CASE WHEN h.xp IS NULL THEN 0
+        ELSE h.xp-COALESCE(o.xp,h.xp) END diff
+        FROM membros m
+        LEFT JOIN xp_logs h ON m.nome=h.nome AND h.data=CURRENT_DATE
+        LEFT JOIN xp_logs o ON m.nome=o.nome
+        AND o.data=(SELECT MAX(data) FROM xp_logs WHERE nome=m.nome AND data<CURRENT_DATE)
+        ORDER BY diff DESC
+    """)
+    dados=cur.fetchall()
+    txt="📊 VARIAÇÃO XP\n\n"
+    for i,(n,d) in enumerate(dados,1):
+        s="📈" if d>0 else "📉" if d<0 else "➖"
+        txt+=f"{i}. {n} — {s} {d:+}\n"
+    return txt
 
-    texto = f"🏆 RANKING {titulo}\n\n"
-    for i, (nome, valor) in enumerate(dados, 1):
-        texto += f"{i}. {nome} — {valor}\n"
+# ================= BANCO GUILD =================  
 
-    return texto
+def get_saldo():
+    cur=conn.cursor()
+    cur.execute("SELECT saldo FROM banco_guilda LIMIT 1")
+    return cur.fetchone()[0]
+
+def registrar_doacao(nome,valor):
+    cur=conn.cursor()
+    cur.execute("INSERT INTO doacoes(nome,valor,data) VALUES(%s,%s,CURRENT_DATE)",(nome,valor))
+    cur.execute("UPDATE banco_guilda SET saldo=saldo+%s",(valor,))
+    t=(valor//500)+(valor//5000)
+    cur.execute("INSERT INTO tickets(nome,semanal,mensal) VALUES(%s,0,0) ON CONFLICT DO NOTHING",(nome,))
+    cur.execute("UPDATE tickets SET semanal=semanal+%s,mensal=mensal+%s WHERE nome=%s",(t,t,nome))
+    conn.commit()
+    return t
+
+async def comando_doar(update,context):
+    if update.effective_user.id!=ADMIN_ID: return
+    if update.message.chat.type!="private": return
+    try:
+        nome=limpar_nome(context.args[0])
+        valor=int(context.args[1])
+        t=registrar_doacao(nome,valor)
+        s=get_saldo()
+        await update.message.reply_text(f"Doação registrada\nTickets: {t}")
+        await context.bot.send_message(chat_id=GRUPO_ID,message_thread_id=TOPICO_BANCO,
+            text=f"{nome} doou {valor} gold\nTickets: {t}\nSaldo: {s}")
+    except:
+        await update.message.reply_text("Uso: /doar Nome Valor")
 
 # ================= DETECÇÃO =================  
 
-async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):  
-    msg = update.message  
+async def detectar(update,context):
+    msg=update.message
+    if not msg: return
+    if msg.chat.id!=GRUPO_ID: return
+    if msg.message_thread_id!=TOPICO_PRESENCA: return
+    texto=msg.text or msg.caption
+    if not texto: return
 
-    if not msg:  
-        return  
+    nome=extrair_nome(texto)
+    if not nome: return
 
-    if msg.chat.id != GRUPO_ID:  
-        return  
+    xp=extrair_xp(texto)
+    nivel=extrair_nivel(texto)
+    dados=extrair_status(texto)
 
-    if msg.message_thread_id != TOPICO_PRESENCA:  
-        return  
+    registrar_membro(nome)
+    salvou=salvar_presenca(nome)
 
-    texto = msg.text or msg.caption  
-    if not texto:  
-        return  
+    salvar_xp(nome,xp,nivel)
+    salvar_status(nome,dados)
 
-    nome = extrair_nome(texto)  
-    if not nome:  
-        return  
-
-    xp = extrair_xp(texto)  
-    nivel = extrair_nivel(texto)  
-    dados = extrair_status(texto)  
-
-    registrar_membro(nome)  
-    salvou = salvar_presenca(nome)  
-
-    salvar_xp(nome, xp, nivel)  
-    salvar_status(nome, dados)  
-
-    if salvou:  
-        await msg.reply_text(mensagem_pilar(nome))  
-    else:  
-        await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")  
-
-    await atualizar_painel(context.application)  
+    if salvou:
+        await msg.reply_text(mensagem_pilar(nome))
+    else:
+        await msg.reply_text(f"{nome} já marcou")
 
 # ================= MAIN =================  
 
-def main():  
-    app = ApplicationBuilder().token(TOKEN).build()  
+def main():
+    app=ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("xp", comando_xp))  
-    app.add_handler(CommandHandler("xpdif", comando_xpdif))
-    app.add_handler(CommandHandler("lista", comando_lista))  
+    app.add_handler(CommandHandler("xp",lambda u,c: u.message.reply_text(get_rank_xp())))
+    app.add_handler(CommandHandler("xpdif",lambda u,c: u.message.reply_text(get_rank_xp_dif())))
+    app.add_handler(CommandHandler("doar",comando_doar))
 
-    app.add_handler(CommandHandler("atk", lambda u,c: u.message.reply_text(gerar_rank("atk","ATAQUE"))))  
-    app.add_handler(CommandHandler("def", lambda u,c: u.message.reply_text(gerar_rank("def","DEFESA"))))  
-    app.add_handler(CommandHandler("hp", lambda u,c: u.message.reply_text(gerar_rank("hp","HP"))))  
-    app.add_handler(CommandHandler("crit", lambda u,c: u.message.reply_text(gerar_rank("crit","CRÍTICO"))))  
-    app.add_handler(CommandHandler("gold", lambda u,c: u.message.reply_text(gerar_rank("gold","GOLD"))))  
-    app.add_handler(CommandHandler("tofu", lambda u,c: u.message.reply_text(gerar_rank("tofus","TOFUS"))))  
+    app.add_handler(CommandHandler("atk",lambda u,c: u.message.reply_text(gerar_rank("atk","ATAQUE"))))
+    app.add_handler(CommandHandler("def",lambda u,c: u.message.reply_text(gerar_rank("def","DEFESA"))))
+    app.add_handler(CommandHandler("hp",lambda u,c: u.message.reply_text(gerar_rank("hp","HP"))))
+    app.add_handler(CommandHandler("crit",lambda u,c: u.message.reply_text(gerar_rank("crit","CRÍTICO"))))
+    app.add_handler(CommandHandler("gold",lambda u,c: u.message.reply_text(gerar_rank("gold","GOLD"))))
+    app.add_handler(CommandHandler("tofu",lambda u,c: u.message.reply_text(gerar_rank("tofus","TOFUS"))))
 
-    app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))  
+    app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL COM XP GLOBAL + XP DIF + PAINEL")  
+    print("🚀 BOT FINAL 100% OK")
+    app.run_polling(drop_pending_updates=True)
 
-    app.run_polling(drop_pending_updates=True)  
-
-if __name__ == "__main__":  
+if __name__=="__main__":
     main()
