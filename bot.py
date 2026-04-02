@@ -277,7 +277,7 @@ async def comando_xp(update, context):
         nome = limpar_nome(" ".join(args))  
         await update.message.reply_text(get_evolucao(nome))  
 
-# ================= RANK (🔥 SISTEMA HÍBRIDO FINAL) =================  
+# ================= RANK =================  
 
 def gerar_rank(campo, titulo):
     cur = conn.cursor()
@@ -309,6 +309,112 @@ def gerar_rank(campo, titulo):
         texto += f"{i}. {nome} — {valor}\n"
 
     return texto
+
+# ================= WIKI (NOVO SISTEMA) =================
+
+def salvar_monstro(nome, hp):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO monstros (nome, hp)
+        VALUES (%s, %s)
+        ON CONFLICT (nome)
+        DO UPDATE SET hp = EXCLUDED.hp
+    """, (nome, hp))
+    conn.commit()
+
+def atualizar_monstro(nome, xp, gold, tipo, mapa):
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE monstros
+        SET xp=%s, gold=%s, tipo=%s, mapa=%s
+        WHERE nome=%s
+    """, (xp, gold, tipo, mapa, nome))
+    conn.commit()
+
+def buscar_monstro(nome):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT nome, hp, xp, gold, tipo, mapa
+        FROM monstros
+        WHERE nome=%s
+    """, (nome,))
+    return cur.fetchone()
+
+def extrair_monstro(texto):
+    nome = None
+    hp = None
+
+    for linha in texto.split("\n"):
+        if not nome:
+            nome = linha.strip().upper()
+
+        if "HP" in linha:
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                hp = int(numeros[-1])
+
+    return nome, hp
+
+async def detectar_privado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+
+    if not msg:
+        return
+
+    if msg.chat.type != "private":
+        return
+
+    texto = msg.text or msg.caption
+    if not texto:
+        return
+
+    nome, hp = extrair_monstro(texto)
+
+    if nome and hp:
+        salvar_monstro(nome, hp)
+        await msg.reply_text(f"📚 Monstro salvo:\n{nome} — HP {hp}")
+
+async def comando_addmob(update, context):
+    try:
+        nome = limpar_nome(context.args[0])
+        xp = int(context.args[1])
+        gold = int(context.args[2])
+        tipo = context.args[3]
+        mapa = context.args[4]
+
+        atualizar_monstro(nome, xp, gold, tipo, mapa)
+
+        await update.message.reply_text(f"✅ {nome} atualizado!")
+
+    except:
+        await update.message.reply_text("Uso:\n/addmob Nome XP GOLD tipo mapa")
+
+async def comando_mob(update, context):
+    if not context.args:
+        await update.message.reply_text("Use:\n/mob nome")
+        return
+
+    nome = limpar_nome(" ".join(context.args))
+    dados = buscar_monstro(nome)
+
+    if not dados:
+        await update.message.reply_text("❌ Monstro não encontrado.")
+        return
+
+    nome, hp, xp, gold, tipo, mapa = dados
+
+    texto = f"📚 {nome}\n❤️ HP: {hp}\n"
+
+    if xp:
+        texto += f"✨ XP: {xp}\n"
+    if gold:
+        texto += f"💰 Gold: {gold}\n"
+    if tipo:
+        texto += f"⚔️ Tipo: {tipo}\n"
+    if mapa:
+        texto += f"🗺️ Mapa: {mapa}\n"
+
+    await update.message.reply_text(texto)
 
 # ================= DETECÇÃO =================  
 
@@ -364,9 +470,14 @@ def main():
     app.add_handler(CommandHandler("gold", lambda u,c: u.message.reply_text(gerar_rank("gold","GOLD"))))  
     app.add_handler(CommandHandler("tofu", lambda u,c: u.message.reply_text(gerar_rank("tofus","TOFUS"))))  
 
+    # 🔥 WIKI (PRIVADO)
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE, detectar_privado))
+    app.add_handler(CommandHandler("addmob", comando_addmob))
+    app.add_handler(CommandHandler("mob", comando_mob))
+
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))  
 
-    print("🚀 BOT FINAL COM PAINEL DIÁRIO + HORÁRIO")  
+    print("🚀 BOT FINAL COM WIKI + PAINEL + SISTEMA COMPLETO")  
 
     app.run_polling(drop_pending_updates=True)  
 
