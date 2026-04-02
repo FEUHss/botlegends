@@ -64,15 +64,10 @@ def extrair_nivel(texto):
 
 def extrair_status(texto):  
     dados = {}  
-
     for linha in texto.split("\n"):  
         linha = linha.strip()  
-
-        if linha.startswith("+"):  
-            continue  
-
-        if "/" in linha and "HP" not in linha:  
-            continue  
+        if linha.startswith("+"): continue  
+        if "/" in linha and "HP" not in linha: continue  
 
         if "ATK" in linha and "DEF" in linha and "CRIT" in linha:  
             numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))  
@@ -92,13 +87,11 @@ def extrair_status(texto):
 
         elif "Gold:" in linha:  
             numeros = re.findall(r"\d+", linha)  
-            if numeros:  
-                dados["gold"] = int(numeros[0])  
+            if numeros: dados["gold"] = int(numeros[0])  
 
         elif "Tofus:" in linha:  
             numeros = re.findall(r"\d+", linha)  
-            if numeros:  
-                dados["tofus"] = int(numeros[0])  
+            if numeros: dados["tofus"] = int(numeros[0])  
 
     return dados  
 
@@ -115,7 +108,7 @@ def mensagem_pilar(nome):
         f"⚡ Registrado: {nome}"
     ])
 
-# ================= BANCO =================  
+# ================= BANCO BASE =================  
 
 def registrar_membro(nome):  
     cur = conn.cursor()  
@@ -125,23 +118,20 @@ def registrar_membro(nome):
 def salvar_presenca(nome):  
     cur = conn.cursor()  
     cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje()))  
-    if cur.fetchone():  
-        return False  
-
-    cur.execute("INSERT INTO presencas (nome, data) VALUES (%s,%s)", (nome, hoje()))  
+    if cur.fetchone(): return False  
+    cur.execute("INSERT INTO presencas (nome,data) VALUES (%s,%s)", (nome, hoje()))  
     conn.commit()  
     return True  
 
 def salvar_xp(nome, xp, nivel):  
-    if xp is None:  
-        return  
+    if xp is None: return  
     cur = conn.cursor()  
     cur.execute("""  
-        INSERT INTO xp_logs (nome, xp, nivel, data)
+        INSERT INTO xp_logs (nome,xp,nivel,data)
         VALUES (%s,%s,%s,%s)
         ON CONFLICT (nome,data)
-        DO UPDATE SET xp=EXCLUDED.xp, nivel=EXCLUDED.nivel
-    """, (nome, xp, nivel, hoje()))  
+        DO UPDATE SET xp=EXCLUDED.xp,nivel=EXCLUDED.nivel
+    """, (nome,xp,nivel,hoje()))  
     conn.commit()  
 
 def salvar_status(nome, dados):  
@@ -158,78 +148,40 @@ def salvar_status(nome, dados):
           dados.get("gold"),dados.get("tofus")))
     conn.commit()
 
-# ================= XP =================  
+# ================= MENSAGEM BANCO (🔥 NOVO) =================  
 
-def get_rank_xp():
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT x.nome,x.nivel,x.xp
-        FROM xp_logs x
-        INNER JOIN (
-            SELECT nome, MAX(data) as data_ref
-            FROM xp_logs GROUP BY nome
-        ) ref
-        ON x.nome=ref.nome AND x.data=ref.data_ref
-        ORDER BY x.xp DESC
-    """)
-    dados = cur.fetchall()
+def gerar_mensagem_doacao(nome, valor, tickets, saldo):
+    bonus_msgs = [
+        "🌟 O Pilar reage à grande oferta!\n\n🔥 +1 entrada extra foi concedida ao doador",
+        "👑 Oferta de alto valor detectada!\n\n🎁 A guilda concede uma entrada bônus",
+        "⚡ O cofre responde à grandeza da oferta...\n\n🎟 Entrada extra liberada",
+        "🔥 A energia dourada se intensifica!\n\n🎁 Recompensa bônus ativada"
+    ]
 
-    texto = "🏆 RANKING XP\n\n"
-    for i,(n,l,xp) in enumerate(dados,1):
-        texto += f"{i}. {n} — Lv {l} - {xp} XP\n"
-    return texto
+    if valor < 5000:
+        return f"""🏛️ O Pilar registra uma nova contribuição...
 
-def get_evolucao(nome):
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT xp FROM xp_logs
-        WHERE nome=%s ORDER BY data DESC LIMIT 2
-    """,(nome,))
-    d=cur.fetchall()
-    if len(d)<2: return "Dados insuficientes"
-    diff=d[0][0]-d[1][0]
-    return f"{nome}\nXP atual: {d[0][0]}\nVariação: {diff:+}"
+👤 Doador: {nome}  
+💰 Oferta: +{valor} gold  
+🎟 Entradas geradas: {tickets}  
 
-# ================= RANK =================  
+━━━━━━━━━━━━━━━
+🏦 Saldo atual: {saldo} gold
+━━━━━━━━━━━━━━━"""
 
-def gerar_rank(campo,titulo):
-    cur=conn.cursor()
-    cur.execute(f"""
-        SELECT s.nome,s.{campo}
-        FROM status s
-        INNER JOIN (
-            SELECT nome,MAX(data) as data_ref
-            FROM status GROUP BY nome
-        ) ref
-        ON s.nome=ref.nome AND s.data=ref.data_ref
-        ORDER BY s.{campo} DESC
-    """)
-    dados=cur.fetchall()
-    txt=f"🏆 {titulo}\n\n"
-    for i,(n,v) in enumerate(dados,1):
-        txt+=f"{i}. {n} — {v}\n"
-    return txt
+    bonus_texto = random.choice(bonus_msgs)
 
-# ================= XPDIF =================  
+    return f"""🏛️ ✨ O Pilar da Riqueza recebe uma nova oferta...
 
-def get_rank_xp_dif():
-    cur=conn.cursor()
-    cur.execute("""
-        SELECT m.nome,
-        CASE WHEN h.xp IS NULL THEN 0
-        ELSE h.xp-COALESCE(o.xp,h.xp) END diff
-        FROM membros m
-        LEFT JOIN xp_logs h ON m.nome=h.nome AND h.data=CURRENT_DATE
-        LEFT JOIN xp_logs o ON m.nome=o.nome
-        AND o.data=(SELECT MAX(data) FROM xp_logs WHERE nome=m.nome AND data<CURRENT_DATE)
-        ORDER BY diff DESC
-    """)
-    dados=cur.fetchall()
-    txt="📊 VARIAÇÃO XP\n\n"
-    for i,(n,d) in enumerate(dados,1):
-        s="📈" if d>0 else "📉" if d<0 else "➖"
-        txt+=f"{i}. {n} — {s} {d:+}\n"
-    return txt
+👤 Doador: {nome}  
+💰 Oferta: +{valor} gold  
+🎟 Entradas geradas: {tickets}  
+
+{bonus_texto}
+
+━━━━━━━━━━━━━━━
+🏦 Saldo atual: {saldo} gold
+━━━━━━━━━━━━━━━"""
 
 # ================= BANCO GUILD =================  
 
@@ -256,9 +208,17 @@ async def comando_doar(update,context):
         valor=int(context.args[1])
         t=registrar_doacao(nome,valor)
         s=get_saldo()
+
         await update.message.reply_text(f"Doação registrada\nTickets: {t}")
-        await context.bot.send_message(chat_id=GRUPO_ID,message_thread_id=TOPICO_BANCO,
-            text=f"{nome} doou {valor} gold\nTickets: {t}\nSaldo: {s}")
+
+        mensagem = gerar_mensagem_doacao(nome, valor, t, s)
+
+        await context.bot.send_message(
+            chat_id=GRUPO_ID,
+            message_thread_id=TOPICO_BANCO,
+            text=mensagem
+        )
+
     except:
         await update.message.reply_text("Uso: /doar Nome Valor")
 
@@ -269,6 +229,7 @@ async def detectar(update,context):
     if not msg: return
     if msg.chat.id!=GRUPO_ID: return
     if msg.message_thread_id!=TOPICO_PRESENCA: return
+
     texto=msg.text or msg.caption
     if not texto: return
 
@@ -308,7 +269,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL 100% OK")
+    print("🚀 BOT FINAL 100% OK COM BANCO ÉPICO")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
