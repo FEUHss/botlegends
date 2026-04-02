@@ -1,306 +1,428 @@
-import os
-import psycopg2
-import random
-import pytz
-import re
-from datetime import datetime
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
+import os  
+import psycopg2  
+import random  
+import pytz  
+import re  
+from datetime import datetime  
+from telegram import Update  
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters  
 
-TOKEN = os.getenv("TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+TOKEN = os.getenv("TOKEN")  
+DATABASE_URL = os.getenv("DATABASE_URL")  
 
-GRUPO_ID = -1003792787717
-TOPICO_PRESENCA = 16325
+GRUPO_ID = -1003792787717  
+TOPICO_PRESENCA = 16325  
 
-GRUPO_LIDERANCA = -1003806440152
-TOPICO_PAINEL = 116
+GRUPO_LIDERANCA = -1003806440152  
+TOPICO_PAINEL = 116  
 
-conn = psycopg2.connect(DATABASE_URL)
-tz = pytz.timezone("America/Sao_Paulo")
+conn = psycopg2.connect(DATABASE_URL)  
+tz = pytz.timezone("America/Sao_Paulo")  
 
-painel_msg_id = None
-painel_data = None
+painel_msg_id = None  
+painel_data = None  
 
-# ================= DATA =================
+# ================= DATA =================  
 
-def hoje():
-    return datetime.now(tz).date()
+def hoje():  
+    return datetime.now(tz).date()  
 
-# ================= UTIL =================
+# ================= UTIL =================  
 
-def limpar_nome(nome):
-    return nome.replace("[LG]", "").strip().upper()
+def limpar_nome(nome):  
+    return nome.replace("[LG]", "").strip().upper()  
 
-def extrair_nome(texto):
-    for linha in texto.split("\n"):
-        partes = linha.strip().split()
-        for i, p in enumerate(partes):
-            if p.isdigit():
-                return limpar_nome(" ".join(partes[i + 1:]))
-    return None
+def extrair_nome(texto):  
+    for linha in texto.split("\n"):  
+        partes = linha.strip().split()  
+        for i, p in enumerate(partes):  
+            if p.isdigit():  
+                return limpar_nome(" ".join(partes[i + 1:]))  
+    return None  
 
-def extrair_xp(texto):
-    for linha in texto.split("\n"):
-        if "XP" in linha:
-            numeros = re.findall(r"\d+", linha.replace(".", "").replace(",", ""))
-            if len(numeros) >= 2:
-                return int(numeros[1])
-    return None
+def extrair_xp(texto):  
+    for linha in texto.split("\n"):  
+        if "XP" in linha:  
+            numeros = re.findall(r"\d+", linha.replace(".", "").replace(",", ""))  
+            if len(numeros) >= 2:  
+                return int(numeros[1])  
+    return None  
 
-def extrair_nivel(texto):
-    for linha in texto.split("\n"):
-        if "Lv" in linha:
-            numeros = re.findall(r"\d+", linha)
-            if numeros:
-                return int(numeros[0])
-    return None
+def extrair_nivel(texto):  
+    for linha in texto.split("\n"):  
+        if "Lv" in linha:  
+            numeros = re.findall(r"\d+", linha)  
+            if numeros:  
+                return int(numeros[0])  
+    return None  
 
-# ================= STATUS =================
+# ================= STATUS =================  
 
-def extrair_status(texto):
-    dados = {}
+def extrair_status(texto):  
+    dados = {}  
 
-    for linha in texto.split("\n"):
-        linha = linha.strip()
+    for linha in texto.split("\n"):  
+        linha = linha.strip()  
 
-        if linha.startswith("+"):
-            continue
+        if linha.startswith("+"):  
+            continue  
 
-        if "/" in linha and "HP" not in linha:
-            continue
+        if "/" in linha and "HP" not in linha:  
+            continue  
 
-        if "ATK" in linha and "DEF" in linha and "CRIT" in linha:
-            numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
-            if len(numeros) >= 3:
-                dados["atk"] = float(numeros[0])
-                dados["def"] = float(numeros[1])
-                dados["crit"] = float(numeros[2])
+        if "ATK" in linha and "DEF" in linha and "CRIT" in linha:  
+            numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))  
+            if len(numeros) >= 3:  
+                dados["atk"] = float(numeros[0])  
+                dados["def"] = float(numeros[1])  
+                dados["crit"] = float(numeros[2])  
 
-        elif "HP" in linha:
-            match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
-            if match:
-                dados["hp"] = int(match.group(2))
-            else:
-                numeros = re.findall(r"\d+", linha)
-                if numeros:
-                    dados["hp"] = int(numeros[-1])
+        elif "HP" in linha:  
+            match = re.search(r"(\d+)\s*/\s*(\d+)", linha)  
+            if match:  
+                dados["hp"] = int(match.group(2))  
+            else:  
+                numeros = re.findall(r"\d+", linha)  
+                if numeros:  
+                    dados["hp"] = int(numeros[-1])  
 
-        elif "Gold:" in linha:
-            numeros = re.findall(r"\d+", linha)
-            if numeros:
-                dados["gold"] = int(numeros[0])
+        elif "Gold:" in linha:  
+            numeros = re.findall(r"\d+", linha)  
+            if numeros:  
+                dados["gold"] = int(numeros[0])  
 
-        elif "Tofus:" in linha:
-            numeros = re.findall(r"\d+", linha)
-            if numeros:
-                dados["tofus"] = int(numeros[0])
+        elif "Tofus:" in linha:  
+            numeros = re.findall(r"\d+", linha)  
+            if numeros:  
+                dados["tofus"] = int(numeros[0])  
 
-    return dados
+    return dados  
 
-# ================= FRASES =================
+# ================= FRASES =================  
 
-def mensagem_pilar(nome):
-    frases = [
-        f"📜 O Pilar registra: {nome} esteve presente.",
-        f"🗿 O Pilar da Sabedoria reconhece {nome}.",
-        f"✨ A presença de {nome} foi gravada no Pilar.",
-        f"👑 O Pilar eterniza: {nome} marcou presença.",
-        f"🔥 Feixes dourados registram a presença de {nome}.",
-        f"🧠 O conhecimento do Pilar agora carrega o nome de {nome}.",
-        f"⚡ Registrado: {nome}"
-    ]
-    return random.choice(frases)
+def mensagem_pilar(nome):  
+    frases = [  
+        f"📜 O Pilar registra: {nome} esteve presente.",  
+        f"🗿 O Pilar da Sabedoria reconhece {nome}.",  
+        f"✨ A presença de {nome} foi gravada no Pilar.",  
+        f"👑 O Pilar eterniza: {nome} marcou presença.",  
+        f"🔥 Feixes dourados registram a presença de {nome}.",  
+        f"🧠 O conhecimento do Pilar agora carrega o nome de {nome}.",  
+        f"⚡ Registrado: {nome}"  
+    ]  
+    return random.choice(frases)  
 
-# ================= BANCO =================
+# ================= BANCO =================  
 
-def registrar_membro(nome):
+def registrar_membro(nome):  
+    cur = conn.cursor()  
+    cur.execute("INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING", (nome,))  
+    conn.commit()  
+
+def salvar_presenca(nome):  
+    cur = conn.cursor()  
+    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje()))  
+    if cur.fetchone():  
+        return False  
+
+    cur.execute("INSERT INTO presencas (nome, data) VALUES (%s,%s)", (nome, hoje()))  
+    conn.commit()  
+    return True  
+
+def salvar_xp(nome, xp, nivel):  
+    if xp is None:  
+        return  
+
+    cur = conn.cursor()  
+    cur.execute("""  
+        INSERT INTO xp_logs (nome, xp, nivel, data)  
+        VALUES (%s, %s, %s, %s)  
+        ON CONFLICT (nome, data)  
+        DO UPDATE SET xp = EXCLUDED.xp, nivel = EXCLUDED.nivel  
+    """, (nome, xp, nivel, hoje()))  
+    conn.commit()  
+
+def salvar_status(nome, dados):  
+    if not dados:  
+        return  
+
+    cur = conn.cursor()  
+    cur.execute("""  
+        INSERT INTO status  
+        (nome, data, atk, def, crit, hp, gold, tofus)  
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)  
+        ON CONFLICT (nome, data)  
+        DO UPDATE SET  
+            atk=EXCLUDED.atk,  
+            def=EXCLUDED.def,  
+            crit=EXCLUDED.crit,  
+            hp=EXCLUDED.hp,  
+            gold=EXCLUDED.gold,  
+            tofus=EXCLUDED.tofus  
+    """, (  
+        nome,  
+        hoje(),  
+        dados.get("atk"),  
+        dados.get("def"),  
+        dados.get("crit"),  
+        dados.get("hp"),  
+        dados.get("gold"),  
+        dados.get("tofus"),  
+    ))  
+    conn.commit()  
+
+# ================= LISTA =================  
+
+def gerar_texto_painel():  
+    cur = conn.cursor()  
+
+    cur.execute("SELECT nome FROM membros")  
+    membros = [m[0] for m in cur.fetchall()]  
+
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje(),))  
+    presentes = [p[0] for p in cur.fetchall()]  
+
+    faltantes = sorted(set(membros) - set(presentes))  
+    presentes = sorted(presentes)  
+
+    texto = f"📜 PRESENÇA — {hoje().strftime('%d/%m')}\n\n"  
+    texto += "🟢 Presentes:\n"  
+    texto += "\n".join([f"✅ {n}" for n in presentes]) if presentes else "Ninguém"  
+
+    texto += "\n\n🔴 Ausentes:\n"  
+    texto += "\n".join([f"❌ {n}" for n in faltantes]) if faltantes else "Nenhum"  
+
+    texto += f"\n\n📊 {len(presentes)}/{len(membros)} membros"  
+
+    return texto  
+
+# ================= PAINEL =================  
+
+async def atualizar_painel(app):  
+    global painel_msg_id, painel_data  
+
+    hoje_data = hoje()  
+    texto = gerar_texto_painel()  
+
+    hora = datetime.now(tz).strftime("%H:%M:%S")  
+    texto += f"\n\n🕒 Atualizado: {hora}"  
+
+    try:  
+        if painel_data != hoje_data:  
+            msg = await app.bot.send_message(  
+                chat_id=GRUPO_LIDERANCA,  
+                text=texto,  
+                message_thread_id=TOPICO_PAINEL  
+            )  
+            painel_msg_id = msg.message_id  
+            painel_data = hoje_data  
+        else:  
+            await app.bot.edit_message_text(  
+                chat_id=GRUPO_LIDERANCA,  
+                message_id=painel_msg_id,  
+                text=texto,  
+            )  
+
+    except Exception as e:  
+        print("Erro painel:", e)  
+
+async def comando_lista(update, context):  
+    await update.message.reply_text(gerar_texto_painel())  
+
+# ================= XP (CORRIGIDO) =================  
+
+def get_rank_xp():  
+    cur = conn.cursor()  
+    cur.execute("""  
+        SELECT x.nome, x.nivel, x.xp
+        FROM xp_logs x
+        INNER JOIN (
+            SELECT nome,
+                   COALESCE(
+                       MAX(CASE WHEN data = CURRENT_DATE THEN data END),
+                       MAX(data)
+                   ) as data_ref
+            FROM xp_logs
+            GROUP BY nome
+        ) ref
+        ON x.nome = ref.nome AND x.data = ref.data_ref
+        ORDER BY x.xp DESC
+    """)  
+
+    dados = cur.fetchall()  
+
+    if not dados:  
+        return "Sem dados de XP."  
+
+    texto = "🏆 RANKING XP\n\n"  
+    for i, (nome, nivel, xp) in enumerate(dados, 1):  
+        texto += f"{i}. {nome} — Lv {nivel} - {xp} XP\n"  
+
+    return texto  
+
+def get_rank_xp_dif():
     cur = conn.cursor()
-    cur.execute("INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING", (nome,))
-    conn.commit()
 
-def salvar_presenca(nome):
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM presencas WHERE nome=%s AND data=%s", (nome, hoje()))
-    if cur.fetchone():
-        return False
-
-    cur.execute("INSERT INTO presencas (nome, data) VALUES (%s,%s)", (nome, hoje()))
-    conn.commit()
-    return True
-
-def salvar_xp(nome, xp, nivel):
-    if xp is None:
-        return
-
-    cur = conn.cursor()
     cur.execute("""
-        INSERT INTO xp_logs (nome, xp, nivel, data)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (nome, data)
-        DO UPDATE SET xp = EXCLUDED.xp, nivel = EXCLUDED.nivel
-    """, (nome, xp, nivel, hoje()))
-    conn.commit()
+        SELECT m.nome,
+               COALESCE(hoje.xp, 0) - COALESCE(ontem.xp, COALESCE(hoje.xp, 0)) as diff
+        FROM membros m
 
-def salvar_status(nome, dados):
+        LEFT JOIN (
+            SELECT nome, xp
+            FROM xp_logs
+            WHERE data = CURRENT_DATE
+        ) hoje ON m.nome = hoje.nome
+
+        LEFT JOIN (
+            SELECT x1.nome, x1.xp
+            FROM xp_logs x1
+            INNER JOIN (
+                SELECT nome, MAX(data) as data
+                FROM xp_logs
+                WHERE data < CURRENT_DATE
+                GROUP BY nome
+            ) x2
+            ON x1.nome = x2.nome AND x1.data = x2.data
+        ) ontem ON m.nome = ontem.nome
+
+        ORDER BY diff DESC
+    """)
+
+    dados = cur.fetchall()
+
+    texto = "📊 VARIAÇÃO XP (24h)\n\n"
+
+    for i, (nome, diff) in enumerate(dados, 1):
+        simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
+        texto += f"{i}. {nome} — {simbolo} {diff:+}\n"
+
+    return texto
+
+async def comando_xpdif(update, context):
+    await update.message.reply_text(get_rank_xp_dif())
+
+def get_evolucao(nome):  
+    cur = conn.cursor()  
+    cur.execute("""  
+        SELECT xp FROM xp_logs  
+        WHERE nome=%s  
+        ORDER BY data DESC  
+        LIMIT 2  
+    """, (nome,))  
+
+    dados = cur.fetchall()  
+
+    if len(dados) < 2:  
+        return f"Dados insuficientes para evolução de {nome}"  
+
+    diff = dados[0][0] - dados[1][0]  
+    simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"  
+
+    return f"{simbolo} {nome}\nXP atual: {dados[0][0]}\nVariação: {diff:+}"  
+
+async def comando_xp(update, context):  
+    args = context.args  
+
+    if not args:  
+        await update.message.reply_text(get_rank_xp())  
+    else:  
+        nome = limpar_nome(" ".join(args))  
+        await update.message.reply_text(get_evolucao(nome))  
+
+# ================= RANK =================  
+
+def gerar_rank(campo, titulo):
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT s.nome, s.{campo}
+        FROM status s
+        INNER JOIN (
+            SELECT nome,
+                   COALESCE(
+                       MAX(CASE WHEN data = CURRENT_DATE THEN data END),
+                       MAX(data)
+                   ) as data_ref
+            FROM status
+            GROUP BY nome
+        ) ref
+        ON s.nome = ref.nome AND s.data = ref.data_ref
+        WHERE s.{campo} IS NOT NULL
+        ORDER BY s.{campo} DESC
+    """)
+
+    dados = cur.fetchall()
+
     if not dados:
-        return
+        return f"Sem dados de {titulo}."
 
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO status
-        (nome, data, atk, def, crit, hp, gold, tofus)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (nome, data)
-        DO UPDATE SET
-            atk=EXCLUDED.atk,
-            def=EXCLUDED.def,
-            crit=EXCLUDED.crit,
-            hp=EXCLUDED.hp,
-            gold=EXCLUDED.gold,
-            tofus=EXCLUDED.tofus
-    """, (
-        nome,
-        hoje(),
-        dados.get("atk"),
-        dados.get("def"),
-        dados.get("crit"),
-        dados.get("hp"),
-        dados.get("gold"),
-        dados.get("tofus"),
-    ))
-    conn.commit()
+    texto = f"🏆 RANKING {titulo}\n\n"
+    for i, (nome, valor) in enumerate(dados, 1):
+        texto += f"{i}. {nome} — {valor}\n"
 
-# ================= WIKI =================
+    return texto
 
-def salvar_monstro(nome, hp):
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO monstros (nome, hp)
-        VALUES (%s, %s)
-        ON CONFLICT (nome)
-        DO UPDATE SET hp = EXCLUDED.hp
-    """, (nome, hp))
-    conn.commit()
+# ================= DETECÇÃO =================  
 
-def atualizar_monstro(nome, xp, gold, tipo, mapa):
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE monstros
-        SET xp=%s, gold=%s, tipo=%s, mapa=%s
-        WHERE nome=%s
-    """, (xp, gold, tipo, mapa, nome))
-    conn.commit()
+async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):  
+    msg = update.message  
 
-def buscar_monstro(nome):
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT nome, hp, xp, gold, tipo, mapa
-        FROM monstros
-        WHERE nome=%s
-    """, (nome,))
-    return cur.fetchone()
+    if not msg:  
+        return  
 
-# 🔥 CORREÇÃO AQUI (GENÉRICA)
-def extrair_monstro(texto):
-    nome = None
-    hp = None
+    if msg.chat.id != GRUPO_ID:  
+        return  
 
-    for linha in texto.split("\n"):
-        linha = linha.strip()
+    if msg.message_thread_id != TOPICO_PRESENCA:  
+        return  
 
-        # HP
-        if "HP" in linha:
-            numeros = re.findall(r"\d+", linha)
-            if numeros:
-                hp = int(numeros[-1])
+    texto = msg.text or msg.caption  
+    if not texto:  
+        return  
 
-        # Nome do monstro (linha limpa, sem números e sem palavras do player)
-        if (
-            not nome
-            and len(linha) < 30
-            and not any(p in linha.lower() for p in ["combate", "você", "energia", "turno"])
-            and not re.search(r"\d", linha)
-        ):
-            nome = linha.upper()
+    nome = extrair_nome(texto)  
+    if not nome:  
+        return  
 
-    return nome, hp
+    xp = extrair_xp(texto)  
+    nivel = extrair_nivel(texto)  
+    dados = extrair_status(texto)  
 
-async def detectar_privado(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
+    registrar_membro(nome)  
+    salvou = salvar_presenca(nome)  
 
-    if not msg:
-        return
+    salvar_xp(nome, xp, nivel)  
+    salvar_status(nome, dados)  
 
-    texto = msg.text or msg.caption
-    if not texto:
-        return
+    if salvou:  
+        await msg.reply_text(mensagem_pilar(nome))  
+    else:  
+        await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")  
 
-    nome, hp = extrair_monstro(texto)
+    await atualizar_painel(context.application)  
 
-    if not nome or not hp:
-        return
+# ================= MAIN =================  
 
-    salvar_monstro(nome, hp)
+def main():  
+    app = ApplicationBuilder().token(TOKEN).build()  
 
-    await msg.reply_text(f"📚 Monstro salvo:\n{nome} — HP {hp}")
+    app.add_handler(CommandHandler("xp", comando_xp))  
+    app.add_handler(CommandHandler("xpdif", comando_xpdif))
+    app.add_handler(CommandHandler("lista", comando_lista))  
 
-async def comando_addmob(update, context):
-    try:
-        nome = limpar_nome(context.args[0])
-        xp = int(context.args[1])
-        gold = int(context.args[2])
-        tipo = context.args[3]
-        mapa = context.args[4]
+    app.add_handler(CommandHandler("atk", lambda u,c: u.message.reply_text(gerar_rank("atk","ATAQUE"))))  
+    app.add_handler(CommandHandler("def", lambda u,c: u.message.reply_text(gerar_rank("def","DEFESA"))))  
+    app.add_handler(CommandHandler("hp", lambda u,c: u.message.reply_text(gerar_rank("hp","HP"))))  
+    app.add_handler(CommandHandler("crit", lambda u,c: u.message.reply_text(gerar_rank("crit","CRÍTICO"))))  
+    app.add_handler(CommandHandler("gold", lambda u,c: u.message.reply_text(gerar_rank("gold","GOLD"))))  
+    app.add_handler(CommandHandler("tofu", lambda u,c: u.message.reply_text(gerar_rank("tofus","TOFUS"))))  
 
-        atualizar_monstro(nome, xp, gold, tipo, mapa)
+    app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))  
 
-        await update.message.reply_text(f"✅ {nome} atualizado!")
+    print("🚀 BOT FINAL COM XP GLOBAL + XP DIF + PAINEL")  
 
-    except:
-        await update.message.reply_text("Uso:\n/addmob Nome XP GOLD tipo mapa")
+    app.run_polling(drop_pending_updates=True)  
 
-async def comando_mob(update, context):
-    nome = limpar_nome(" ".join(context.args))
-    dados = buscar_monstro(nome)
-
-    if not dados:
-        await update.message.reply_text("❌ Monstro não encontrado.")
-        return
-
-    nome, hp, xp, gold, tipo, mapa = dados
-
-    texto = f"📚 {nome}\n❤️ HP: {hp}\n"
-
-    if xp:
-        texto += f"✨ XP: {xp}\n"
-    if gold:
-        texto += f"💰 Gold: {gold}\n"
-    if tipo:
-        texto += f"⚔️ Tipo: {tipo}\n"
-    if mapa:
-        texto += f"🗺️ Mapa: {mapa}\n"
-
-    await update.message.reply_text(texto)
-
-# ================= MAIN =================
-
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("addmob", comando_addmob))
-    app.add_handler(CommandHandler("mob", comando_mob))
-
-    app.add_handler(
-        MessageHandler(
-            (filters.TEXT | filters.CaptionRegex(".*")) & filters.ChatType.PRIVATE,
-            detectar_privado
-        )
-    )
-
-    print("🚀 BOT COM WIKI FUNCIONANDO")
-
-    app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
+if __name__ == "__main__":  
     main()
