@@ -120,6 +120,48 @@ def salvar_status(nome, dados):
           dados.get("gold"),dados.get("tofus")))
     conn.commit()
 
+# ================= COFRE =================
+def registrar_item(nome, item):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO cofre_itens (nome,item,data) VALUES (%s,%s,%s)",
+        (nome, item.upper(), hoje())
+    )
+    conn.commit()
+
+def remover_item(item):
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM cofre_itens WHERE item=%s LIMIT 1 RETURNING item",
+        (item.upper(),)
+    )
+    r = cur.fetchone()
+    conn.commit()
+    return r
+
+def gerar_msg_item(nome, item):
+    return f"""🏛️ Cofre da Sabedoria
+
+✨ Um artefato foi entregue ao Pilar
+
+👤 Guardião: {nome}
+📦 Item: {item}
+
+━━━━━━━━━━━━━━━
+🔐 O cofre absorve seu poder
+━━━━━━━━━━━━━━━"""
+
+def gerar_msg_remocao(item):
+    return f"""🏛️ Cofre da Sabedoria
+
+⚠️ Um item foi removido
+
+📦 Item: {item}
+
+━━━━━━━━━━━━━━━
+🗝️ O selo foi temporariamente quebrado
+━━━━━━━━━━━━━━━"""
+
 # ================= XP =================
 def get_rank_xp():
     cur=conn.cursor()
@@ -139,7 +181,6 @@ def get_rank_xp():
         txt+=f"{i}. {n} — Lv {l} - {xp} XP\n"
     return txt
 
-# ✅ XPDIF CORRIGIDO (SEM QUEBRAR NADA)
 def get_rank_xp_dif():
     cur = conn.cursor()
 
@@ -180,165 +221,43 @@ def get_rank_xp_dif():
 
     return texto
 
-# ================= RANK STATUS =================
-def gerar_rank(campo,titulo):
-    cur=conn.cursor()
-    cur.execute(f"""
-        SELECT s.nome,s.{campo}
-        FROM status s
-        INNER JOIN (
-            SELECT nome,MAX(data) as data_ref
-            FROM status GROUP BY nome
-        ) ref
-        ON s.nome=ref.nome AND s.data=ref.data_ref
-        ORDER BY s.{campo} DESC
-    """)
-    d=cur.fetchall()
-    txt=f"🏆 {titulo}\n\n"
-    for i,(n,v) in enumerate(d,1):
-        txt+=f"{i}. {n} — {v}\n"
-    return txt
+# ================= COMANDOS COFRE =================
+async def comando_doaritem(update, context):
+    if update.effective_user.id != ADMIN_ID: return
+    if update.message.chat.type != "private": return
 
-# ================= BANCO =================
-def get_saldo():
-    cur=conn.cursor()
-    cur.execute("SELECT saldo FROM banco_guilda LIMIT 1")
-    return cur.fetchone()[0]
+    nome = limpar_nome(context.args[0])
+    item = " ".join(context.args[1:])
 
-def registrar_doacao(nome,valor):
-    cur=conn.cursor()
-    cur.execute("INSERT INTO doacoes(nome,valor,data) VALUES(%s,%s,CURRENT_DATE)",(nome,valor))
-    cur.execute("UPDATE banco_guilda SET saldo=saldo+%s",(valor,))
-    t=(valor//500)+(valor//5000)
-    cur.execute("INSERT INTO tickets(nome,semanal,mensal) VALUES(%s,0,0) ON CONFLICT DO NOTHING",(nome,))
-    cur.execute("UPDATE tickets SET semanal=semanal+%s,mensal=mensal+%s WHERE nome=%s",(t,t,nome))
-    conn.commit()
-    return t
+    registrar_item(nome, item)
 
-def get_tickets(nome):
-    cur=conn.cursor()
-    cur.execute("SELECT semanal,mensal FROM tickets WHERE nome=%s",(nome,))
-    return cur.fetchone()
-
-def rank_tickets(tipo):
-    cur=conn.cursor()
-    cur.execute(f"SELECT nome,{tipo} FROM tickets ORDER BY {tipo} DESC")
-    d=cur.fetchall()
-    txt=f"🏆 RANK {tipo.upper()}\n\n"
-    for i,(n,v) in enumerate(d,1):
-        txt+=f"{i}. {n} — {v}\n"
-    return txt
-
-def rank_doacoes():
-    cur=conn.cursor()
-    cur.execute("SELECT nome,SUM(valor) FROM doacoes GROUP BY nome ORDER BY SUM(valor) DESC")
-    d=cur.fetchall()
-    txt="🏆 RANK DOAÇÕES\n\n"
-    for i,(n,v) in enumerate(d,1):
-        txt+=f"{i}. {n} — {v}\n"
-    return txt
-
-# ================= MENSAGEM BANCO =================
-def gerar_mensagem_doacao(nome, valor, tickets, saldo):
-
-    if valor < 5000:
-        return f"""🏛️ Nova contribuição registrada
-
-👤 Doador: {nome}
-💰 Valor: +{valor} gold
-🎟 Tickets: {tickets}
-
-━━━━━━━━━━━━━━━
-🏦 Saldo atual: {saldo} gold
-━━━━━━━━━━━━━━━"""
-
-    bonus_msgs = [
-        "🔥 O Pilar reage à grande oferta!\n🎁 Entrada bônus concedida",
-        "⚡ O cofre vibra com poder!\n🎟 Ticket extra ativado",
-        "👑 Oferta digna de lenda!\n🎁 Recompensa bônus recebida",
-        "🌟 Energia dourada detectada!\n🎟 Entrada extra liberada"
-    ]
-
-    bonus = random.choice(bonus_msgs)
-
-    return f"""🏛️ ✨ DOAÇÃO ÉPICA ✨
-
-👤 Doador: {nome}
-💰 Valor: +{valor} gold
-🎟 Tickets: {tickets}
-
-{bonus}
-
-━━━━━━━━━━━━━━━
-🏦 Saldo atual: {saldo} gold
-━━━━━━━━━━━━━━━"""
-
-# ================= COMANDOS BANCO =================
-async def comando_doar(update,context):
-    if update.effective_user.id!=ADMIN_ID: return
-    if update.message.chat.type!="private": return
-
-    nome=limpar_nome(context.args[0])
-    valor=int(context.args[1])
-
-    t=registrar_doacao(nome,valor)
-    s=get_saldo()
-
-    await update.message.reply_text(f"Doação registrada\nTickets: {t}")
+    await update.message.reply_text(f"Item registrado: {item}")
 
     await context.bot.send_message(
         chat_id=GRUPO_ID,
         message_thread_id=TOPICO_BANCO,
-        text=gerar_mensagem_doacao(nome,valor,t,s)
+        text=gerar_msg_item(nome, item)
     )
 
-async def comando_banco(update,context):
-    await update.message.reply_text(f"🏦 Saldo: {get_saldo()} gold")
+async def comando_removeritem(update, context):
+    if update.effective_user.id != ADMIN_ID: return
+    if update.message.chat.type != "private": return
 
-async def comando_ticket(update,context):
-    nome=limpar_nome(" ".join(context.args))
-    d=get_tickets(nome)
-    if not d:
-        await update.message.reply_text("Sem tickets.")
+    item = " ".join(context.args)
+
+    r = remover_item(item)
+
+    if not r:
+        await update.message.reply_text("Item não encontrado.")
         return
-    await update.message.reply_text(f"{nome}\n🎟 Total: {d[0]+d[1]}")
 
-async def comando_ticketS(update,context):
-    nome=limpar_nome(" ".join(context.args))
-    d=get_tickets(nome)
-    await update.message.reply_text(f"{nome}\n🎟 Semanal: {d[0]}")
+    await update.message.reply_text(f"Item removido: {item}")
 
-async def comando_ticketM(update,context):
-    nome=limpar_nome(" ".join(context.args))
-    d=get_tickets(nome)
-    await update.message.reply_text(f"{nome}\n🎟 Mensal: {d[1]}")
-
-async def comando_rank_semanal(update,context):
-    await update.message.reply_text(rank_tickets("semanal"))
-
-async def comando_rank_mensal(update,context):
-    await update.message.reply_text(rank_tickets("mensal"))
-
-async def comando_rank_doacoes(update,context):
-    await update.message.reply_text(rank_doacoes())
-
-async def comando_resetbanco(update,context):
-    if update.effective_user.id!=ADMIN_ID: return
-    conn.cursor().execute("UPDATE banco_guilda SET saldo=0")
-    conn.commit()
-    await update.message.reply_text("Banco resetado.")
-
-async def comando_resetsemanal(update,context):
-    if update.effective_user.id!=ADMIN_ID: return
-    conn.cursor().execute("UPDATE tickets SET semanal=0")
-    conn.commit()
-    await update.message.reply_text("Tickets semanais resetados.")
-
-async def comando_resetmensal(update,context):
-    if update.effective_user.id!=ADMIN_ID: return
-    conn.cursor().execute("UPDATE tickets SET mensal=0")
-    conn.commit()
-    await update.message.reply_text("Tickets mensais resetados.")
+    await context.bot.send_message(
+        chat_id=GRUPO_ID,
+        message_thread_id=TOPICO_BANCO,
+        text=gerar_msg_remocao(item)
+    )
 
 # ================= DETECÇÃO =================
 async def detectar(update,context):
@@ -362,7 +281,13 @@ async def detectar(update,context):
     salvar_xp(nome,xp,nivel)
     salvar_status(nome,dados)
 
-    await msg.reply_text(f"Presença registrada: {nome}")
+    await msg.reply_text(f"""🧠 Pilar da Sabedoria reconhece presença
+
+👤 {nome}
+
+━━━━━━━━━━━━━━━
+📜 Registro gravado
+━━━━━━━━━━━━━━━""")
 
 # ================= MAIN =================
 def main():
@@ -391,9 +316,13 @@ def main():
     app.add_handler(CommandHandler("gold",lambda u,c: u.message.reply_text(gerar_rank("gold","GOLD"))))
     app.add_handler(CommandHandler("tofu",lambda u,c: u.message.reply_text(gerar_rank("tofus","TOFUS"))))
 
+    # NOVOS
+    app.add_handler(CommandHandler("doaritem",comando_doaritem))
+    app.add_handler(CommandHandler("removeritem",comando_removeritem))
+
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL COMPLETO (TUDO FUNCIONANDO)")
+    print("🚀 BOT FINAL COMPLETO + COFRE")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
