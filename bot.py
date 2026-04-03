@@ -239,10 +239,39 @@ def rank_doacoes():
     return txt
 
 # ================= MENSAGEM BANCO =================
-def gerar_mensagem_doacao(nome,valor,tickets,saldo):
+def gerar_mensagem_doacao(nome, valor, tickets, saldo):
+
     if valor < 5000:
-        return f"{nome} doou {valor} gold\n🎟 {tickets} tickets\n💰 Saldo: {saldo}"
-    return f"🔥 DOAÇÃO ÉPICA 🔥\n{nome} doou {valor}\n🎟 {tickets} tickets (+bonus)\n💰 Saldo: {saldo}"
+        return f"""🏛️ Nova contribuição registrada
+
+👤 Doador: {nome}
+💰 Valor: +{valor} gold
+🎟 Tickets: {tickets}
+
+━━━━━━━━━━━━━━━
+🏦 Saldo atual: {saldo} gold
+━━━━━━━━━━━━━━━"""
+
+    bonus_msgs = [
+        "🔥 O Pilar reage à grande oferta!\n🎁 Entrada bônus concedida",
+        "⚡ O cofre vibra com poder!\n🎟 Ticket extra ativado",
+        "👑 Oferta digna de lenda!\n🎁 Recompensa bônus recebida",
+        "🌟 Energia dourada detectada!\n🎟 Entrada extra liberada"
+    ]
+
+    bonus = random.choice(bonus_msgs)
+
+    return f"""🏛️ ✨ DOAÇÃO ÉPICA ✨
+
+👤 Doador: {nome}
+💰 Valor: +{valor} gold
+🎟 Tickets: {tickets}
+
+{bonus}
+
+━━━━━━━━━━━━━━━
+🏦 Saldo atual: {saldo} gold
+━━━━━━━━━━━━━━━"""
 
 # ================= COMANDOS BANCO =================
 async def comando_doar(update,context):
