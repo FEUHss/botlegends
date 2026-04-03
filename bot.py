@@ -139,24 +139,46 @@ def get_rank_xp():
         txt+=f"{i}. {n} — Lv {l} - {xp} XP\n"
     return txt
 
+# ✅ XPDIF CORRIGIDO (SEM QUEBRAR NADA)
 def get_rank_xp_dif():
-    cur=conn.cursor()
+    cur = conn.cursor()
+
     cur.execute("""
+        WITH hoje AS (
+            SELECT nome, xp
+            FROM xp_logs
+            WHERE data = CURRENT_DATE
+        ),
+        ontem AS (
+            SELECT DISTINCT ON (nome) nome, xp
+            FROM xp_logs
+            WHERE data < CURRENT_DATE
+            ORDER BY nome, data DESC
+        )
+
         SELECT m.nome,
-        CASE WHEN h.xp IS NULL THEN 0
-        ELSE h.xp-COALESCE(o.xp,h.xp) END diff
+               CASE
+                   WHEN hoje.xp IS NULL THEN 0
+                   WHEN ontem.xp IS NULL THEN 0
+                   ELSE hoje.xp - ontem.xp
+               END AS diff
+
         FROM membros m
-        LEFT JOIN xp_logs h ON m.nome=h.nome AND h.data=CURRENT_DATE
-        LEFT JOIN xp_logs o ON m.nome=o.nome
-        AND o.data=(SELECT MAX(data) FROM xp_logs WHERE nome=m.nome AND data<CURRENT_DATE)
+        LEFT JOIN hoje ON m.nome = hoje.nome
+        LEFT JOIN ontem ON m.nome = ontem.nome
+
         ORDER BY diff DESC
     """)
-    d=cur.fetchall()
-    txt="📊 VARIAÇÃO XP\n\n"
-    for i,(n,v) in enumerate(d,1):
-        s="📈" if v>0 else "📉" if v<0 else "➖"
-        txt+=f"{i}. {n} — {s} {v:+}\n"
-    return txt
+
+    dados = cur.fetchall()
+
+    texto = "📊 VARIAÇÃO XP (24h)\n\n"
+
+    for i, (nome, diff) in enumerate(dados, 1):
+        simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
+        texto += f"{i}. {nome} — {simbolo} {diff:+}\n"
+
+    return texto
 
 # ================= RANK STATUS =================
 def gerar_rank(campo,titulo):
@@ -178,34 +200,6 @@ def gerar_rank(campo,titulo):
     return txt
 
 # ================= BANCO =================
-
-def gerar_mensagem_doacao(nome,valor,tickets,saldo):
-    bonus_msgs=[
-        "🔥 O Pilar reage a esta grande oferta!\n🎁 Entrada bônus concedida",
-        "👑 Oferta lendária detectada!\n🎟 Ticket extra liberado",
-        "⚡ O cofre vibra com poder!\n🎁 Recompensa bônus ativada",
-        "🌟 Energia dourada intensa!\n🎟 Entrada extra garantida"
-    ]
-
-    if valor < 5000:
-        return f"""🏛️ Nova doação registrada
-
-👤 {nome}
-💰 +{valor} gold
-🎟 {tickets} tickets
-
-🏦 Saldo atual: {saldo}"""
-
-    return f"""🏛️✨ GRANDE DOAÇÃO!
-
-👤 {nome}
-💰 +{valor} gold
-🎟 {tickets} tickets
-
-{random.choice(bonus_msgs)}
-
-🏦 Saldo atual: {saldo}"""
-
 def get_saldo():
     cur=conn.cursor()
     cur.execute("SELECT saldo FROM banco_guilda LIMIT 1")
@@ -244,8 +238,13 @@ def rank_doacoes():
         txt+=f"{i}. {n} — {v}\n"
     return txt
 
-# ================= COMANDOS =================
+# ================= MENSAGEM BANCO =================
+def gerar_mensagem_doacao(nome,valor,tickets,saldo):
+    if valor < 5000:
+        return f"{nome} doou {valor} gold\n🎟 {tickets} tickets\n💰 Saldo: {saldo}"
+    return f"🔥 DOAÇÃO ÉPICA 🔥\n{nome} doou {valor}\n🎟 {tickets} tickets (+bonus)\n💰 Saldo: {saldo}"
 
+# ================= COMANDOS BANCO =================
 async def comando_doar(update,context):
     if update.effective_user.id!=ADMIN_ID: return
     if update.message.chat.type!="private": return
@@ -270,17 +269,20 @@ async def comando_banco(update,context):
 async def comando_ticket(update,context):
     nome=limpar_nome(" ".join(context.args))
     d=get_tickets(nome)
-    await update.message.reply_text(f"{nome}\nSemanal: {d[0]}\nMensal: {d[1]}")
+    if not d:
+        await update.message.reply_text("Sem tickets.")
+        return
+    await update.message.reply_text(f"{nome}\n🎟 Total: {d[0]+d[1]}")
 
 async def comando_ticketS(update,context):
     nome=limpar_nome(" ".join(context.args))
     d=get_tickets(nome)
-    await update.message.reply_text(f"{nome} — 🎟 {d[0]}")
+    await update.message.reply_text(f"{nome}\n🎟 Semanal: {d[0]}")
 
 async def comando_ticketM(update,context):
     nome=limpar_nome(" ".join(context.args))
     d=get_tickets(nome)
-    await update.message.reply_text(f"{nome} — 🎟 {d[1]}")
+    await update.message.reply_text(f"{nome}\n🎟 Mensal: {d[1]}")
 
 async def comando_rank_semanal(update,context):
     await update.message.reply_text(rank_tickets("semanal"))
@@ -295,19 +297,19 @@ async def comando_resetbanco(update,context):
     if update.effective_user.id!=ADMIN_ID: return
     conn.cursor().execute("UPDATE banco_guilda SET saldo=0")
     conn.commit()
-    await update.message.reply_text("Banco resetado")
+    await update.message.reply_text("Banco resetado.")
 
 async def comando_resetsemanal(update,context):
     if update.effective_user.id!=ADMIN_ID: return
     conn.cursor().execute("UPDATE tickets SET semanal=0")
     conn.commit()
-    await update.message.reply_text("Reset semanal")
+    await update.message.reply_text("Tickets semanais resetados.")
 
 async def comando_resetmensal(update,context):
     if update.effective_user.id!=ADMIN_ID: return
     conn.cursor().execute("UPDATE tickets SET mensal=0")
     conn.commit()
-    await update.message.reply_text("Reset mensal")
+    await update.message.reply_text("Tickets mensais resetados.")
 
 # ================= DETECÇÃO =================
 async def detectar(update,context):
@@ -340,14 +342,6 @@ def main():
     app.add_handler(CommandHandler("xp",lambda u,c: u.message.reply_text(get_rank_xp())))
     app.add_handler(CommandHandler("xpdif",lambda u,c: u.message.reply_text(get_rank_xp_dif())))
 
-    app.add_handler(CommandHandler("atk",lambda u,c: u.message.reply_text(gerar_rank("atk","ATAQUE"))))
-    app.add_handler(CommandHandler("def",lambda u,c: u.message.reply_text(gerar_rank("def","DEFESA"))))
-    app.add_handler(CommandHandler("hp",lambda u,c: u.message.reply_text(gerar_rank("hp","HP"))))
-    app.add_handler(CommandHandler("crit",lambda u,c: u.message.reply_text(gerar_rank("crit","CRÍTICO"))))
-    app.add_handler(CommandHandler("gold",lambda u,c: u.message.reply_text(gerar_rank("gold","GOLD"))))
-    app.add_handler(CommandHandler("tofu",lambda u,c: u.message.reply_text(gerar_rank("tofus","TOFUS"))))
-
-    # BANCO
     app.add_handler(CommandHandler("doar",comando_doar))
     app.add_handler(CommandHandler("banco",comando_banco))
     app.add_handler(CommandHandler("ticket",comando_ticket))
@@ -356,13 +350,21 @@ def main():
     app.add_handler(CommandHandler("ranksemanal",comando_rank_semanal))
     app.add_handler(CommandHandler("rankmensal",comando_rank_mensal))
     app.add_handler(CommandHandler("rankdoacoes",comando_rank_doacoes))
+
     app.add_handler(CommandHandler("resetbanco",comando_resetbanco))
     app.add_handler(CommandHandler("resetsemanal",comando_resetsemanal))
     app.add_handler(CommandHandler("resetmensal",comando_resetmensal))
 
+    app.add_handler(CommandHandler("atk",lambda u,c: u.message.reply_text(gerar_rank("atk","ATAQUE"))))
+    app.add_handler(CommandHandler("def",lambda u,c: u.message.reply_text(gerar_rank("def","DEFESA"))))
+    app.add_handler(CommandHandler("hp",lambda u,c: u.message.reply_text(gerar_rank("hp","HP"))))
+    app.add_handler(CommandHandler("crit",lambda u,c: u.message.reply_text(gerar_rank("crit","CRÍTICO"))))
+    app.add_handler(CommandHandler("gold",lambda u,c: u.message.reply_text(gerar_rank("gold","GOLD"))))
+    app.add_handler(CommandHandler("tofu",lambda u,c: u.message.reply_text(gerar_rank("tofus","TOFUS"))))
+
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
-    print("🚀 BOT FINAL COMPLETO FUNCIONANDO")
+    print("🚀 BOT FINAL COMPLETO (TUDO FUNCIONANDO)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
