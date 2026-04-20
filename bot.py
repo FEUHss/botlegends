@@ -494,7 +494,7 @@ async def detectar(update,context):
 📜 Registro gravado com sucesso
 ━━━━━━━━━━━━━━━""")
 
-await atualizar_lista(context)
+    await atualizar_lista(context)
 
 # ================= MAIN =================
 def main():
