@@ -497,6 +497,24 @@ async def detectar(update,context):
     await atualizar_lista(context)
 
 # ================= MAIN =================
+def gerar_rank(campo,titulo):
+    cur=conn.cursor()
+    cur.execute(f"""
+        SELECT s.nome,s.{campo}
+        FROM status s
+        INNER JOIN (
+            SELECT nome,MAX(data) as data_ref
+            FROM status GROUP BY nome
+        ) ref
+        ON s.nome=ref.nome AND s.data=ref.data_ref
+        ORDER BY s.{campo} DESC
+    """)
+    d=cur.fetchall()
+    txt=f"🏆 {titulo}\n\n"
+    for i,(n,v) in enumerate(d,1):
+        txt+=f"{i}. {n} — {v}\n"
+    return txt
+
 def main():
     app=ApplicationBuilder().token(TOKEN).build()
 
