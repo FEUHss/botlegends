@@ -528,7 +528,7 @@ def main():
 
     app.add_handler(CommandHandler("lista", comando_lista))
 
-    app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
+    MessageHandler((filters.TEXT | filters.CaptionRegex(".*")) & ~filters.COMMAND, detectar)
 
     print("🚀 BOT FINAL COMPLETO + COFRE ATIVO")
     app.run_polling(drop_pending_updates=True)
