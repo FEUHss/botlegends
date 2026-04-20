@@ -445,7 +445,7 @@ async def atualizar_lista(context):
         try:
             await context.bot.edit_message_text(
                 chat_id=GRUPO_LIDERANCA_ID,
-                message_thread_id=TOPICO_LISTA,
+                message_thread_id=TOPICO_LISTA_ID,
                 message_id=msg_id,
                 text=texto
             )
@@ -454,7 +454,7 @@ async def atualizar_lista(context):
     else:
         msg = await context.bot.send_message(
             chat_id=GRUPO_LIDERANCA_ID,
-            message_thread_id=TOPICO_LISTA,
+            message_thread_id=TOPICO_LISTA_ID,
             text=texto
         )
         salvar_mensagem_lista(msg.message_id)
