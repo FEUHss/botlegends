@@ -501,7 +501,7 @@ def main():
     app=ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("xp",lambda u,c: u.message.reply_text(get_rank_xp())))
-    app.add_handler(CommandHandler("xpdif",lamba u,c: u.message.reply_text(get_rank_xp_dif())))
+    app.add_handler(CommandHandler("xpdif",lambda u,c: u.message.reply_text(get_rank_xp_dif())))
 
     app.add_handler(CommandHandler("doar",comando_doar))
     app.add_handler(CommandHandler("banco",comando_banco))
