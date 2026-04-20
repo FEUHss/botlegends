@@ -445,7 +445,7 @@ async def atualizar_lista(context):
         try:
             await context.bot.edit_message_text(
                 chat_id=GRUPO_LIDERANCA_ID,
-                message_thread_id=TOPICO_LISTA_ID,
+                message_thread_id=TOPICO_LISTA,
                 message_id=msg_id,
                 text=texto
             )
@@ -454,7 +454,7 @@ async def atualizar_lista(context):
     else:
         msg = await context.bot.send_message(
             chat_id=GRUPO_LIDERANCA_ID,
-            message_thread_id=TOPICO_LISTA_ID,
+            message_thread_id=TOPICO_LISTA,
             text=texto
         )
         salvar_mensagem_lista(msg.message_id)
@@ -528,7 +528,7 @@ def main():
 
     app.add_handler(CommandHandler("lista", comando_lista))
 
-    MessageHandler((filters.TEXT | filters.CaptionRegex(".*")) & ~filters.COMMAND, detectar)
+    app.add_handler(MessageHandler((filters.TEXT | filters.CaptionRegex(".*")) & ~filters.COMMAND, detectar))
 
     print("🚀 BOT FINAL COMPLETO + COFRE ATIVO")
     app.run_polling(drop_pending_updates=True)
