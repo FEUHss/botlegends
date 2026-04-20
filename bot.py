@@ -395,6 +395,72 @@ async def comando_removeritem(update, context):
         text=gerar_msg_remocao(item)
     )
 
+# ================= LISTA PRESENÇA =================
+def gerar_lista_texto():
+    cur = conn.cursor()
+
+    cur.execute("SELECT nome FROM membros ORDER BY nome")
+    membros = [m[0] for m in cur.fetchall()]
+
+    cur.execute("SELECT nome FROM presencas WHERE data=%s", (hoje(),))
+    presentes = {p[0] for p in cur.fetchall()}
+
+    texto = "📜 LISTA DE PRESENÇA — LEGENDS\n\n"
+
+    for nome in membros:
+        if nome in presentes:
+            texto += f"✅ {nome}\n"
+        else:
+            texto += f"❌ {nome}\n"
+
+    return texto
+
+
+def get_mensagem_lista():
+    cur = conn.cursor()
+    cur.execute("SELECT mensagem_id FROM lista_presenca WHERE data=%s", (hoje(),))
+    r = cur.fetchone()
+    return r[0] if r else None
+
+
+def salvar_mensagem_lista(msg_id):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO lista_presenca (data,mensagem_id)
+        VALUES (%s,%s)
+        ON CONFLICT (data)
+        DO UPDATE SET mensagem_id=EXCLUDED.mensagem_id
+    """, (hoje(), msg_id))
+    conn.commit()
+
+
+async def atualizar_lista(context):
+    msg_id = get_mensagem_lista()
+    texto = gerar_lista_texto()
+
+    if msg_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=GRUPO_ID,
+                message_thread_id=TOPICO_PRESENCA,
+                message_id=msg_id,
+                text=texto
+            )
+        except:
+            pass
+    else:
+        msg = await context.bot.send_message(
+            chat_id=GRUPO_ID,
+            message_thread_id=TOPICO_PRESENCA,
+            text=texto
+        )
+        salvar_mensagem_lista(msg.message_id)
+
+
+async def comando_lista(update, context):
+    texto = gerar_lista_texto()
+    await update.message.reply_text(texto)
+
 # ================= DETECÇÃO =================
 async def detectar(update,context):
     msg=update.message
@@ -420,6 +486,11 @@ async def detectar(update,context):
     await msg.reply_text(f"""🧠 Pilar da Sabedoria reconhece presença
 
 👤 {nome}
+
+await msg.reply_text(f"Presença registrada: {nome}")
+
+# ATUALIZA LISTA
+await atualizar_lista(context)
 
 ━━━━━━━━━━━━━━━
 📜 Registro gravado com sucesso
