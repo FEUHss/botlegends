@@ -10,6 +10,9 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, Con
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+TOPICO_LISTA = 116
+GRUPO_LIDERANCA_ID = -1003806440152
+
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
 
@@ -441,8 +444,8 @@ async def atualizar_lista(context):
     if msg_id:
         try:
             await context.bot.edit_message_text(
-                chat_id=GRUPO_ID,
-                message_thread_id=TOPICO_PRESENCA,
+                chat_id=GRUPO_LIDERANCA_ID,
+                message_thread_id=TOPICO_LISTA,
                 message_id=msg_id,
                 text=texto
             )
@@ -450,8 +453,8 @@ async def atualizar_lista(context):
             pass
     else:
         msg = await context.bot.send_message(
-            chat_id=GRUPO_ID,
-            message_thread_id=TOPICO_PRESENCA,
+            chat_id=GRUPO_LIDERANCA_ID,
+            message_thread_id=TOPICO_LISTA,
             text=texto
         )
         salvar_mensagem_lista(msg.message_id)
@@ -487,21 +490,18 @@ async def detectar(update,context):
 
 👤 {nome}
 
-await msg.reply_text(f"Presença registrada: {nome}")
-
-# ATUALIZA LISTA
-await atualizar_lista(context)
-
 ━━━━━━━━━━━━━━━
 📜 Registro gravado com sucesso
 ━━━━━━━━━━━━━━━""")
+
+await atualizar_lista(context)
 
 # ================= MAIN =================
 def main():
     app=ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("xp",lambda u,c: u.message.reply_text(get_rank_xp())))
-    app.add_handler(CommandHandler("xpdif",lambda u,c: u.message.reply_text(get_rank_xp_dif())))
+    app.add_handler(CommandHandler("xpdif",lamba u,c: u.message.reply_text(get_rank_xp_dif())))
 
     app.add_handler(CommandHandler("doar",comando_doar))
     app.add_handler(CommandHandler("banco",comando_banco))
@@ -525,6 +525,8 @@ def main():
 
     app.add_handler(CommandHandler("doaritem",comando_doaritem))
     app.add_handler(CommandHandler("removeritem",comando_removeritem))
+
+    app.add_handler(CommandHandler("lista", comando_lista))
 
     app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
 
