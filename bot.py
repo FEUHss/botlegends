@@ -323,6 +323,42 @@ async def comando_resetmensal(update,context):
     conn.commit()
     await update.message.reply_text("Tickets mensais resetados.")
 
+# ================= TICKETS PRESENÇA =================
+def adicionar_ticket_presenca(nome):
+    cur = conn.cursor()
+
+    # verifica se já ganhou ticket hoje
+    cur.execute("""
+        SELECT 1 FROM tickets_presenca
+        WHERE nome=%s AND data=%s
+    """, (nome, hoje()))
+
+    if cur.fetchone():
+        return
+
+    # registra controle (evita duplicar)
+    cur.execute("""
+        INSERT INTO tickets_presenca(nome,data)
+        VALUES(%s,%s)
+    """, (nome, hoje()))
+
+    # garante que existe no banco principal
+    cur.execute("""
+        INSERT INTO tickets(nome,semanal,mensal)
+        VALUES(%s,0,0)
+        ON CONFLICT DO NOTHING
+    """, (nome,))
+
+    # soma ticket no banco principal
+    cur.execute("""
+        UPDATE tickets
+        SET semanal = semanal + 1,
+            mensal = mensal + 1
+        WHERE nome=%s
+    """, (nome,))
+
+    conn.commit()
+
 # ================= COFRE =================
 def registrar_item(nome, item):
     cur = conn.cursor()
@@ -482,7 +518,8 @@ async def detectar(update,context):
     dados=extrair_status(texto)
 
     registrar_membro(nome)
-    salvar_presenca(nome)
+    if salvar_presenca(nome):
+    adicionar_ticket_presenca(nome)
     salvar_xp(nome,xp,nivel)
     salvar_status(nome,dados)
 
