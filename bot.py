@@ -519,7 +519,7 @@ async def detectar(update,context):
 
     registrar_membro(nome)
     if salvar_presenca(nome):
-    adicionar_ticket_presenca(nome)
+        adicionar_ticket_presenca(nome)
     salvar_xp(nome,xp,nivel)
     salvar_status(nome,dados)
 
