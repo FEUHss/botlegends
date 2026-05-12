@@ -34,45 +34,6 @@ except Exception as e:
     logger.error(f"❌ Erro ao criar pool de banco: {e}")
     db_pool = None
 
-def run_migrations():
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Migration falhou: sem conexão")
-        return
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            ALTER TABLE membros ADD COLUMN IF NOT EXISTS telegram_id BIGINT
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id SERIAL PRIMARY KEY,
-                nome_mob VARCHAR NOT NULL,
-                status VARCHAR DEFAULT 'ativa',
-                data_inicio TIMESTAMP DEFAULT NOW(),
-                data_fim TIMESTAMP
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS task_participantes (
-                id SERIAL PRIMARY KEY,
-                task_id INT REFERENCES tasks(id),
-                telegram_id BIGINT NOT NULL,
-                nome VARCHAR NOT NULL,
-                kills INT DEFAULT 0,
-                data DATE DEFAULT CURRENT_DATE,
-                UNIQUE(task_id, telegram_id)
-            )
-        """)
-        conn.commit()
-        cur.close()
-        logger.info("✅ Migrations executadas com sucesso")
-    except Exception as e:
-        logger.error(f"❌ Erro nas migrations: {e}")
-        conn.rollback()
-    finally:
-        return_db_connection(conn)
-
 def get_db_connection():
     """Obtém conexão do pool com tratamento de erro"""
     if db_pool is None:
@@ -118,6 +79,44 @@ def execute_query(query, params=None, fetch=False, fetch_one=False):
         return_db_connection(conn)
 
 tz = pytz.timezone("America/Sao_Paulo")
+
+# ================= MIGRATIONS =================
+def run_migrations():
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Migration falhou: sem conexão")
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE membros ADD COLUMN IF NOT EXISTS telegram_id BIGINT")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                nome_mob VARCHAR NOT NULL,
+                status VARCHAR DEFAULT 'ativa',
+                data_inicio TIMESTAMP DEFAULT NOW(),
+                data_fim TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS task_participantes (
+                id SERIAL PRIMARY KEY,
+                task_id INT REFERENCES tasks(id),
+                telegram_id BIGINT NOT NULL,
+                nome VARCHAR NOT NULL,
+                kills INT DEFAULT 0,
+                data DATE DEFAULT CURRENT_DATE,
+                UNIQUE(task_id, telegram_id)
+            )
+        """)
+        conn.commit()
+        cur.close()
+        logger.info("✅ Migrations executadas com sucesso")
+    except Exception as e:
+        logger.error(f"❌ Erro nas migrations: {e}")
+        conn.rollback()
+    finally:
+        return_db_connection(conn)
 
 # ================= DATA =================
 def hoje():
@@ -898,6 +897,36 @@ async def detectar_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Erro em detectar_kill: {e}")
 
+async def comando_task_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        task = get_task_ativa()
+        if not task:
+            await update.message.reply_text("📭 Nenhuma task ativa no momento.")
+            return
+        task_id, nome_mob = task
+        participantes = execute_query(
+            "SELECT nome, kills FROM task_participantes WHERE task_id=%s ORDER BY kills DESC",
+            (task_id,), fetch=True
+        )
+        if not participantes:
+            await update.message.reply_text(
+                f"⚔️ Task ativa: {nome_mob}\n\nNenhum participante ainda. Use /participar_task!"
+            )
+            return
+        ranking = "\n".join(
+            f"{i}. {nome} — {kills} kill{'s' if kills != 1 else ''}"
+            for i, (nome, kills) in enumerate(participantes, 1)
+        )
+        total_kills = sum(k for _, k in participantes)
+        await update.message.reply_text(
+            f"⚔️ Task ativa: {nome_mob}\n\n"
+            f"🏆 Kills:\n{ranking}\n\n"
+            f"💀 Total: {total_kills} kills"
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_task_status: {e}")
+        await update.message.reply_text("❌ Erro ao buscar status da task")
+
 async def detectar_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         msg = update.message
@@ -1136,6 +1165,9 @@ def main():
 
         # SORTEIO
         app.add_handler(CommandHandler("sorteio", comando_sorteio))
+
+        # STATUS DA TASK
+        app.add_handler(CommandHandler("task_status", comando_task_status))
 
         # DETECÇÃO DE FORWARDS (tasks) — antes do handler geral
         app.add_handler(MessageHandler(filters.FORWARDED & filters.TEXT & ~filters.COMMAND, detectar_task))
