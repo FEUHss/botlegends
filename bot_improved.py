@@ -1,0 +1,753 @@
+import os
+import psycopg2
+import psycopg2.pool
+import random
+import pytz
+import re
+import logging
+from datetime import datetime
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
+
+# ================= LOGGING =================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+TOKEN = os.getenv("TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+TOPICO_LISTA = 116
+GRUPO_LIDERANCA_ID = -1003806440153
+GRUPO_ID = -1003792787717
+TOPICO_PRESENCA = 16325
+TOPICO_BANCO = 30933
+ADMIN_ID = 5285053532
+
+# ================= DATABASE CONNECTION POOL =================
+try:
+    db_pool = psycopg2.pool.SimpleConnectionPool(1, 20, DATABASE_URL)
+    logger.info("✅ Pool de conexão de banco criado")
+except Exception as e:
+    logger.error(f"❌ Erro ao criar pool de banco: {e}")
+    db_pool = None
+
+def get_db_connection():
+    """Obtém conexão do pool com tratamento de erro"""
+    if db_pool is None:
+        logger.error("❌ Pool de banco não inicializado")
+        return None
+    try:
+        return db_pool.getconn()
+    except Exception as e:
+        logger.error(f"❌ Erro ao obter conexão: {e}")
+        return None
+
+def return_db_connection(conn):
+    """Retorna conexão ao pool"""
+    if db_pool and conn:
+        db_pool.putconn(conn)
+
+def execute_query(query, params=None, fetch=False, fetch_one=False):
+    """Executa query com tratamento de erro centralizado"""
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Conexão com banco indisponível")
+        return None if fetch or fetch_one else False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute(query, params or ())
+        
+        if fetch:
+            result = cur.fetchall()
+        elif fetch_one:
+            result = cur.fetchone()
+        else:
+            conn.commit()
+            result = True
+        
+        cur.close()
+        return result
+    except Exception as e:
+        logger.error(f"❌ Erro na query: {e}")
+        conn.rollback()
+        return None if fetch or fetch_one else False
+    finally:
+        return_db_connection(conn)
+
+tz = pytz.timezone("America/Sao_Paulo")
+
+# ================= DATA =================
+def hoje():
+    return datetime.now(tz).date()
+
+# ================= UTIL =================
+def limpar_nome(nome):
+    if not nome:
+        return None
+    return nome.replace("[LG]", "").strip().upper()
+
+def extrair_nome(texto):
+    if not texto:
+        return None
+    for linha in texto.split("\n"):
+        partes = linha.strip().split()
+        for i, p in enumerate(partes):
+            if p.isdigit():
+                return limpar_nome(" ".join(partes[i + 1:]))
+    return None
+
+def extrair_xp(texto):
+    if not texto:
+        return None
+    for linha in texto.split("\n"):
+        if "XP" in linha:
+            numeros = re.findall(r"\d+", linha.replace(".", "").replace(",", ""))
+            if len(numeros) >= 2:
+                return int(numeros[1])
+    return None
+
+def extrair_nivel(texto):
+    if not texto:
+        return None
+    for linha in texto.split("\n"):
+        if "Lv" in linha:
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                return int(numeros[0])
+    return None
+
+# ================= STATUS =================
+def extrair_status(texto):
+    dados = {}
+    if not texto:
+        return dados
+    
+    for linha in texto.split("\n"):
+        linha = linha.strip()
+        if linha.startswith("+"): continue
+        if "/" in linha and "HP" not in linha: continue
+
+        if "ATK" in linha and "DEF" in linha and "CRIT" in linha:
+            numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
+            if len(numeros) >= 3:
+                try:
+                    dados["atk"] = float(numeros[0])
+                    dados["def"] = float(numeros[1])
+                    dados["crit"] = float(numeros[2])
+                except ValueError:
+                    logger.warning(f"⚠️ Erro ao parsear ATK/DEF/CRIT: {numeros}")
+
+        elif "HP" in linha:
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                try:
+                    dados["hp"] = int(numeros[-1])
+                except ValueError:
+                    logger.warning(f"⚠️ Erro ao parsear HP: {numeros}")
+
+        elif "Gold:" in linha:
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                try:
+                    dados["gold"] = int(numeros[0])
+                except ValueError:
+                    logger.warning(f"⚠️ Erro ao parsear Gold: {numeros}")
+
+        elif "Tofus:" in linha:
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                try:
+                    dados["tofus"] = int(numeros[0])
+                except ValueError:
+                    logger.warning(f"⚠️ Erro ao parsear Tofus: {numeros}")
+
+    return dados
+
+# ================= BANCO BASE =================
+def registrar_membro(nome):
+    if not nome:
+        return False
+    query = "INSERT INTO membros (nome) VALUES (%s) ON CONFLICT DO NOTHING"
+    return execute_query(query, (nome,))
+
+def salvar_presenca(nome):
+    if not nome:
+        return False
+    
+    check_query = "SELECT 1 FROM presencas WHERE nome=%s AND data=%s"
+    if execute_query(check_query, (nome, hoje()), fetch_one=True):
+        return False
+    
+    insert_query = "INSERT INTO presencas (nome,data) VALUES (%s,%s)"
+    return execute_query(insert_query, (nome, hoje()))
+
+def salvar_xp(nome, xp, nivel):
+    if not nome or xp is None:
+        return False
+    
+    query = """
+        INSERT INTO xp_logs (nome,xp,nivel,data)
+        VALUES (%s,%s,%s,%s)
+        ON CONFLICT (nome,data)
+        DO UPDATE SET xp=EXCLUDED.xp,nivel=EXCLUDED.nivel
+    """
+    return execute_query(query, (nome, xp, nivel, hoje()))
+
+def salvar_status(nome, dados):
+    if not nome or not dados:
+        return False
+    
+    query = """
+        INSERT INTO status (nome,data,atk,def,crit,hp,gold,tofus)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (nome,data)
+        DO UPDATE SET atk=EXCLUDED.atk,def=EXCLUDED.def,crit=EXCLUDED.crit,
+        hp=EXCLUDED.hp,gold=EXCLUDED.gold,tofus=EXCLUDED.tofus
+    """
+    return execute_query(query, (
+        nome, hoje(), dados.get("atk"), dados.get("def"),
+        dados.get("crit"), dados.get("hp"),
+        dados.get("gold"), dados.get("tofus")
+    ))
+
+# ================= XP =================
+def get_rank_xp():
+    query = """
+        SELECT x.nome,x.nivel,x.xp
+        FROM xp_logs x
+        INNER JOIN (
+            SELECT nome, MAX(data) as data_ref
+            FROM xp_logs GROUP BY nome
+        ) ref
+        ON x.nome=ref.nome AND x.data=ref.data_ref
+        ORDER BY x.xp DESC
+    """
+    d = execute_query(query, fetch=True)
+    if not d:
+        return "❌ Sem dados de XP"
+    
+    txt = "🏆 RANKING XP\n\n"
+    for i, (n, l, xp) in enumerate(d, 1):
+        txt += f"{i}. {n} — Lv {l} - {xp} XP\n"
+    return txt
+
+def get_rank_xp_dif():
+    query = """
+        WITH hoje AS (
+            SELECT nome, xp
+            FROM xp_logs
+            WHERE data = CURRENT_DATE
+        ),
+        ontem AS (
+            SELECT DISTINCT ON (nome) nome, xp
+            FROM xp_logs
+            WHERE data < CURRENT_DATE
+            ORDER BY nome, data DESC
+        )
+        SELECT m.nome,
+               CASE
+                   WHEN hoje.xp IS NULL THEN 0
+                   WHEN ontem.xp IS NULL THEN 0
+                   ELSE hoje.xp - ontem.xp
+               END AS diff
+        FROM membros m
+        LEFT JOIN hoje ON m.nome = hoje.nome
+        LEFT JOIN ontem ON m.nome = ontem.nome
+        ORDER BY diff DESC
+    """
+    dados = execute_query(query, fetch=True)
+    if not dados:
+        return "❌ Sem dados de variação"
+    
+    texto = "📊 VARIAÇÃO XP (24h)\n\n"
+    for i, (nome, diff) in enumerate(dados, 1):
+        simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
+        texto += f"{i}. {nome} — {simbolo} {diff:+}\n"
+    return texto
+
+# ================= RANK STATUS =================
+def gerar_rank(campo, titulo):
+    # Validar campo para evitar SQL injection
+    campos_validos = ["atk", "def", "crit", "hp", "gold", "tofus"]
+    if campo not in campos_validos:
+        return f"❌ Campo inválido: {campo}"
+    
+    query = f"""
+        SELECT s.nome,s.{campo}
+        FROM status s
+        INNER JOIN (
+            SELECT nome,MAX(data) as data_ref
+            FROM status GROUP BY nome
+        ) ref
+        ON s.nome=ref.nome AND s.data=ref.data_ref
+        ORDER BY s.{campo} DESC
+    """
+    d = execute_query(query, fetch=True)
+    if not d:
+        return f"❌ Sem dados de {titulo}"
+    
+    txt = f"🏆 {titulo}\n\n"
+    for i, (n, v) in enumerate(d, 1):
+        txt += f"{i}. {n} — {v}\n"
+    return txt
+
+# ================= BANCO =================
+def get_saldo():
+    query = "SELECT saldo FROM banco_guilda LIMIT 1"
+    result = execute_query(query, fetch_one=True)
+    return result[0] if result else 0
+
+def registrar_doacao(nome, valor):
+    if not nome or not isinstance(valor, int) or valor <= 0:
+        return 0
+    
+    conn = get_db_connection()
+    if not conn:
+        return 0
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO doacoes(nome,valor,data) VALUES(%s,%s,CURRENT_DATE)", (nome, valor))
+        cur.execute("UPDATE banco_guilda SET saldo=saldo+%s", (valor,))
+        t = (valor // 500) + (valor // 5000)
+
+        cur.execute("""
+            INSERT INTO tickets(nome,semanal,mensal)
+            VALUES(%s,0,0)
+            ON CONFLICT DO NOTHING
+        """, (nome,))
+
+        cur.execute("""
+            UPDATE tickets
+            SET semanal=semanal+%s, mensal=mensal+%s
+            WHERE nome=%s
+        """, (t, t, nome))
+
+        conn.commit()
+        cur.close()
+        return t
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar doação: {e}")
+        conn.rollback()
+        return 0
+    finally:
+        return_db_connection(conn)
+
+def get_tickets(nome):
+    if not nome:
+        return None
+    query = "SELECT semanal,mensal FROM tickets WHERE nome=%s"
+    return execute_query(query, (nome,), fetch_one=True)
+
+def rank_tickets(tipo):
+    if tipo not in ["semanal", "mensal"]:
+        return "❌ Tipo inválido"
+    
+    query = f"SELECT nome,{tipo} FROM tickets ORDER BY {tipo} DESC"
+    d = execute_query(query, fetch=True)
+    if not d:
+        return f"❌ Sem dados de {tipo}"
+
+    txt = f"🏆 RANK {tipo.upper()}\n\n"
+    for i, (n, v) in enumerate(d, 1):
+        txt += f"{i}. {n} — {v}\n"
+    return txt
+
+def rank_doacoes():
+    query = "SELECT nome,SUM(valor) FROM doacoes GROUP BY nome ORDER BY SUM(valor) DESC"
+    d = execute_query(query, fetch=True)
+    if not d:
+        return "❌ Sem dados de doações"
+
+    txt = "🏆 RANK DOAÇÕES\n\n"
+    for i, (n, v) in enumerate(d, 1):
+        txt += f"{i}. {n} — {v}\n"
+    return txt
+
+# ================= MENSAGEM BANCO =================
+def gerar_mensagem_doacao(nome, valor, tickets, saldo):
+    if valor < 5000:
+        return f"""🏛️ Nova contribuição registrada
+
+👤 Doador: {nome}
+💰 Valor: +{valor} gold
+🎟 Tickets: {tickets}
+
+━━━━━━━━━━━━━━━
+🏦 Saldo atual: {saldo} gold
+━━━━━━━━━━━━━━━"""
+
+    bonus_msgs = [
+        "🔥 O Pilar reage à grande oferta!\n🎁 Entrada bônus concedida",
+        "⚡ O cofre vibra com poder!\n🎟 Ticket extra ativado",
+        "👑 Oferta digna de lenda!\n🎁 Recompensa bônus recebida",
+        "🌟 Energia dourada detectada!\n🎟 Entrada extra liberada"
+    ]
+
+    bonus = random.choice(bonus_msgs)
+
+    return f"""🏛️ ✨ DOAÇÃO ÉPICA ✨
+
+👤 Doador: {nome}
+💰 Valor: +{valor} gold
+🎟 Tickets: {tickets}
+
+{bonus}
+
+━━━━━━━━━━━━━━━
+🏦 Saldo atual: {saldo} gold
+━━━━━━━━━━━━━━━"""
+
+# ================= COMANDOS BANCO =================
+async def comando_doar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("❌ Acesso negado")
+            return
+        
+        if update.message.chat.type != "private":
+            await update.message.reply_text("❌ Use em chat privado")
+            return
+        
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text("❌ Uso: /doar <nome> <valor>")
+            return
+        
+        nome = limpar_nome(context.args[0])
+        try:
+            valor = int(context.args[1])
+        except ValueError:
+            await update.message.reply_text("❌ Valor deve ser um número")
+            return
+
+        if not nome:
+            await update.message.reply_text("❌ Nome inválido")
+            return
+
+        t = registrar_doacao(nome, valor)
+        s = get_saldo()
+
+        await update.message.reply_text(f"✅ Doação registrada\nTickets: {t}")
+
+        await context.bot.send_message(
+            chat_id=GRUPO_ID,
+            message_thread_id=TOPICO_BANCO,
+            text=gerar_mensagem_doacao(nome, valor, t, s)
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_doar: {e}")
+        await update.message.reply_text("❌ Erro ao processar comando")
+
+async def comando_banco(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text(f"🏦 Saldo: {get_saldo()} gold")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_banco: {e}")
+        await update.message.reply_text("❌ Erro ao buscar saldo")
+
+async def comando_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if not context.args:
+            await update.message.reply_text("❌ Uso: /ticket <nome>")
+            return
+        
+        nome = limpar_nome(" ".join(context.args))
+        if not nome:
+            await update.message.reply_text("❌ Nome inválido")
+            return
+        
+        d = get_tickets(nome)
+
+        if not d:
+            await update.message.reply_text("❌ Sem tickets")
+            return
+
+        await update.message.reply_text(f"{nome}\n🎟 Total: {d[0]+d[1]}")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_ticket: {e}")
+        await update.message.reply_text("❌ Erro ao buscar tickets")
+
+async def comando_ticketS(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if not context.args:
+            await update.message.reply_text("❌ Uso: /ticketS <nome>")
+            return
+        
+        nome = limpar_nome(" ".join(context.args))
+        if not nome:
+            await update.message.reply_text("❌ Nome inválido")
+            return
+        
+        d = get_tickets(nome)
+        if not d:
+            await update.message.reply_text("❌ Sem tickets")
+            return
+        
+        await update.message.reply_text(f"{nome}\n🎟 Semanal: {d[0]}")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_ticketS: {e}")
+        await update.message.reply_text("❌ Erro ao buscar tickets")
+
+async def comando_ticketM(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if not context.args:
+            await update.message.reply_text("❌ Uso: /ticketM <nome>")
+            return
+        
+        nome = limpar_nome(" ".join(context.args))
+        if not nome:
+            await update.message.reply_text("❌ Nome inválido")
+            return
+        
+        d = get_tickets(nome)
+        if not d:
+            await update.message.reply_text("❌ Sem tickets")
+            return
+        
+        await update.message.reply_text(f"{nome}\n🎟 Mensal: {d[1]}")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_ticketM: {e}")
+        await update.message.reply_text("❌ Erro ao buscar tickets")
+
+async def comando_rank_semanal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text(rank_tickets("semanal"))
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_rank_semanal: {e}")
+        await update.message.reply_text("❌ Erro ao buscar ranking")
+
+async def comando_rank_mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text(rank_tickets("mensal"))
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_rank_mensal: {e}")
+        await update.message.reply_text("❌ Erro ao buscar ranking")
+
+async def comando_rank_doacoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text(rank_doacoes())
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_rank_doacoes: {e}")
+        await update.message.reply_text("❌ Erro ao buscar ranking")
+
+async def comando_resetbanco(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            return
+        execute_query("UPDATE banco_guilda SET saldo=0")
+        await update.message.reply_text("✅ Banco resetado")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_resetbanco: {e}")
+        await update.message.reply_text("❌ Erro ao resetar")
+
+async def comando_resetsemanal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            return
+        execute_query("UPDATE tickets SET semanal=0")
+        await update.message.reply_text("✅ Tickets semanais resetados")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_resetsemanal: {e}")
+        await update.message.reply_text("❌ Erro ao resetar")
+
+async def comando_resetmensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            return
+        execute_query("UPDATE tickets SET mensal=0")
+        await update.message.reply_text("✅ Tickets mensais resetados")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_resetmensal: {e}")
+        await update.message.reply_text("❌ Erro ao resetar")
+
+# ================= COFRE =================
+def registrar_item(nome, item):
+    if not nome or not item:
+        return False
+    query = "INSERT INTO cofre_itens (nome,item,data) VALUES (%s,%s,%s)"
+    return execute_query(query, (nome, item.upper(), hoje()))
+
+def remover_item(item):
+    if not item:
+        return None
+    query = "DELETE FROM cofre_itens WHERE item=%s LIMIT 1 RETURNING item"
+    return execute_query(query, (item.upper(),), fetch_one=True)
+
+def gerar_msg_item(nome, item):
+    return f"""🏛️ Cofre da Sabedoria
+
+✨ Um artefato foi entregue ao Pilar
+
+👤 Guardião: {nome}
+📦 Item: {item}
+
+━━━━━━━━━━━━━━━
+🔐 O cofre absorve seu poder
+━━━━━━━━━━━━━━━"""
+
+def gerar_msg_remocao(item):
+    return f"""🏛️ Cofre da Sabedoria
+
+⚠️ Um item foi removido
+
+📦 Item: {item}
+
+━━━━━━━━━━━━━━━
+🗝️ O selo foi temporariamente quebrado
+━━━━━━━━━━━━━━━"""
+
+# ================= LISTA PRESENÇA =================
+def gerar_lista_texto():
+    membros_query = "SELECT nome FROM membros ORDER BY nome"
+    membros = execute_query(membros_query, fetch=True)
+    if not membros:
+        return "❌ Sem membros registrados"
+    
+    membros = [m[0] for m in membros]
+
+    presentes_query = "SELECT nome FROM presencas WHERE data=%s"
+    presentes_result = execute_query(presentes_query, (hoje(),), fetch=True)
+    presentes = {p[0] for p in presentes_result} if presentes_result else set()
+
+    texto = "📜 LISTA DE PRESENÇA — LEGENDS\n\n"
+
+    for nome in membros:
+        if nome in presentes:
+            texto += f"✅ {nome}\n"
+        else:
+            texto += f"❌ {nome}\n"
+
+    return texto
+
+def get_mensagem_lista():
+    query = "SELECT mensagem_id FROM lista_presenca WHERE data=%s"
+    r = execute_query(query, (hoje(),), fetch_one=True)
+    return r[0] if r else None
+
+def salvar_mensagem_lista(msg_id):
+    if not msg_id:
+        return False
+    query = """
+        INSERT INTO lista_presenca (data,mensagem_id)
+        VALUES (%s,%s)
+        ON CONFLICT (data)
+        DO UPDATE SET mensagem_id=EXCLUDED.mensagem_id
+    """
+    return execute_query(query, (hoje(), msg_id))
+
+async def atualizar_lista(context):
+    try:
+        msg_id = get_mensagem_lista()
+        texto = gerar_lista_texto()
+
+        if msg_id:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=GRUPO_LIDERANCA_ID,
+                    message_thread_id=TOPICO_LISTA,
+                    message_id=msg_id,
+                    text=texto
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Erro ao editar mensagem: {e}")
+        else:
+            msg = await context.bot.send_message(
+                chat_id=GRUPO_LIDERANCA_ID,
+                message_thread_id=TOPICO_LISTA,
+                text=texto
+            )
+            salvar_mensagem_lista(msg.message_id)
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar lista: {e}")
+
+async def comando_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text(gerar_lista_texto())
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_lista: {e}")
+        await update.message.reply_text("❌ Erro ao gerar lista")
+
+# ================= DETECÇÃO =================
+async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        msg = update.message
+        if not msg: return
+        if msg.chat.id != GRUPO_ID: return
+        if msg.message_thread_id != TOPICO_PRESENCA: return
+
+        texto = msg.text or msg.caption
+        if not texto: return
+
+        nome = extrair_nome(texto)
+        if not nome: return
+
+        xp = extrair_xp(texto)
+        nivel = extrair_nivel(texto)
+        dados = extrair_status(texto)
+
+        registrar_membro(nome)
+        salvar_presenca(nome)
+        salvar_xp(nome, xp, nivel)
+        salvar_status(nome, dados)
+
+        await msg.reply_text(f"""🧠 Pilar da Sabedoria reconhece presença
+
+👤 {nome}
+
+━━━━━━━━━━━━━━━
+📜 Registro gravado com sucesso
+━━━━━━━━━━━━━━━""")
+
+        await atualizar_lista(context)
+    except Exception as e:
+        logger.error(f"❌ Erro ao detectar: {e}")
+
+# ================= MAIN =================
+def main():
+    try:
+        app = ApplicationBuilder().token(TOKEN).build()
+
+        # XP
+        app.add_handler(CommandHandler("xp", lambda u, c: u.message.reply_text(get_rank_xp())))
+        app.add_handler(CommandHandler("xpdif", lambda u, c: u.message.reply_text(get_rank_xp_dif())))
+
+        # STATUS
+        app.add_handler(CommandHandler("atk", lambda u, c: u.message.reply_text(gerar_rank("atk", "ATAQUE"))))
+        app.add_handler(CommandHandler("def", lambda u, c: u.message.reply_text(gerar_rank("def", "DEFESA"))))
+        app.add_handler(CommandHandler("hp", lambda u, c: u.message.reply_text(gerar_rank("hp", "HP"))))
+        app.add_handler(CommandHandler("crit", lambda u, c: u.message.reply_text(gerar_rank("crit", "CRÍTICO"))))
+        app.add_handler(CommandHandler("gold", lambda u, c: u.message.reply_text(gerar_rank("gold", "GOLD"))))
+        app.add_handler(CommandHandler("tofu", lambda u, c: u.message.reply_text(gerar_rank("tofus", "TOFUS"))))
+
+        # BANCO
+        app.add_handler(CommandHandler("doar", comando_doar))
+        app.add_handler(CommandHandler("banco", comando_banco))
+        app.add_handler(CommandHandler("ticket", comando_ticket))
+        app.add_handler(CommandHandler("ticketS", comando_ticketS))
+        app.add_handler(CommandHandler("ticketM", comando_ticketM))
+        app.add_handler(CommandHandler("ranksemanal", comando_rank_semanal))
+        app.add_handler(CommandHandler("rankmensal", comando_rank_mensal))
+        app.add_handler(CommandHandler("rankdoacoes", comando_rank_doacoes))
+
+        app.add_handler(CommandHandler("resetbanco", comando_resetbanco))
+        app.add_handler(CommandHandler("resetsemanal", comando_resetsemanal))
+        app.add_handler(CommandHandler("resetmensal", comando_resetmensal))
+
+        # LISTA
+        app.add_handler(CommandHandler("lista", comando_lista))
+
+        # DETECÇÃO
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, detectar))
+
+        logger.info("🚀 BOT INICIADO COM SUCESSO")
+        app.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        logger.error(f"❌ Erro fatal: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
