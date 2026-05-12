@@ -897,6 +897,57 @@ async def detectar_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Erro em detectar_kill: {e}")
 
+async def comando_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Jogador se vincula digitando /me <nome_in_game>"""
+    try:
+        if not context.args:
+            await update.message.reply_text("❌ Uso: /me <seu_nome_no_jogo>\nEx: /me Archangel")
+            return
+        nome = limpar_nome(" ".join(context.args))
+        if not nome:
+            await update.message.reply_text("❌ Nome inválido")
+            return
+        telegram_id = update.effective_user.id
+        membro = execute_query("SELECT nome FROM membros WHERE nome=%s", (nome,), fetch_one=True)
+        if not membro:
+            await update.message.reply_text(
+                f"❌ {nome} não está cadastrado como membro.\nEnvie seu print de presença no tópico correto primeiro."
+            )
+            return
+        execute_query("UPDATE membros SET telegram_id=%s WHERE nome=%s", (telegram_id, nome))
+        await update.message.reply_text(f"✅ Vinculado! Agora você é {nome} no sistema.")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_me: {e}")
+        await update.message.reply_text("❌ Erro ao vincular")
+
+async def comando_vincular(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin vincula um jogador: responde à mensagem dele com /vincular <nome>"""
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("❌ Acesso negado")
+            return
+        if not context.args:
+            await update.message.reply_text("❌ Uso: responda a mensagem do jogador com /vincular <nome_in_game>")
+            return
+        nome = limpar_nome(" ".join(context.args))
+        if not nome:
+            await update.message.reply_text("❌ Nome inválido")
+            return
+        msg = update.message
+        if not msg.reply_to_message:
+            await update.message.reply_text("❌ Responda à mensagem do jogador que quer vincular")
+            return
+        telegram_id = msg.reply_to_message.from_user.id
+        membro = execute_query("SELECT nome FROM membros WHERE nome=%s", (nome,), fetch_one=True)
+        if not membro:
+            await update.message.reply_text(f"❌ {nome} não está cadastrado como membro")
+            return
+        execute_query("UPDATE membros SET telegram_id=%s WHERE nome=%s", (telegram_id, nome))
+        await update.message.reply_text(f"✅ {nome} vinculado com sucesso!")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_vincular: {e}")
+        await update.message.reply_text("❌ Erro ao vincular")
+
 async def comando_task_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         task = get_task_ativa()
@@ -1168,6 +1219,10 @@ def main():
 
         # STATUS DA TASK
         app.add_handler(CommandHandler("task_status", comando_task_status))
+
+        # VINCULAÇÃO
+        app.add_handler(CommandHandler("me", comando_me))
+        app.add_handler(CommandHandler("vincular", comando_vincular))
 
         # DETECÇÃO DE FORWARDS (tasks) — antes do handler geral
         app.add_handler(MessageHandler(filters.FORWARDED & filters.TEXT & ~filters.COMMAND, detectar_task))
