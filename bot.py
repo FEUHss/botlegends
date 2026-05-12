@@ -34,6 +34,45 @@ except Exception as e:
     logger.error(f"❌ Erro ao criar pool de banco: {e}")
     db_pool = None
 
+def run_migrations():
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Migration falhou: sem conexão")
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            ALTER TABLE membros ADD COLUMN IF NOT EXISTS telegram_id BIGINT
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                nome_mob VARCHAR NOT NULL,
+                status VARCHAR DEFAULT 'ativa',
+                data_inicio TIMESTAMP DEFAULT NOW(),
+                data_fim TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS task_participantes (
+                id SERIAL PRIMARY KEY,
+                task_id INT REFERENCES tasks(id),
+                telegram_id BIGINT NOT NULL,
+                nome VARCHAR NOT NULL,
+                kills INT DEFAULT 0,
+                data DATE DEFAULT CURRENT_DATE,
+                UNIQUE(task_id, telegram_id)
+            )
+        """)
+        conn.commit()
+        cur.close()
+        logger.info("✅ Migrations executadas com sucesso")
+    except Exception as e:
+        logger.error(f"❌ Erro nas migrations: {e}")
+        conn.rollback()
+    finally:
+        return_db_connection(conn)
+
 def get_db_connection():
     """Obtém conexão do pool com tratamento de erro"""
     if db_pool is None:
@@ -1052,6 +1091,7 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= MAIN =================
 def main():
     try:
+        run_migrations()
         app = ApplicationBuilder().token(TOKEN).build()
 
         # XP
