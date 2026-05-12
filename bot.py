@@ -229,10 +229,12 @@ def get_rank_xp():
     d = execute_query(query, fetch=True)
     if not d:
         return "❌ Sem dados de XP"
-    
-    txt = "🏆 RANKING XP\n\n"
+
+    medalhas = {1: "🥇", 2: "🥈", 3: "🥉"}
+    txt = "🏆 RANKING GERAL DE XP\n\n"
     for i, (n, l, xp) in enumerate(d, 1):
-        txt += f"{i}. {n} — Lv {l} - {xp} XP\n"
+        prefix = medalhas.get(i, f"{i}.")
+        txt += f"{prefix} {n} — Lv {l} - {xp:,} XP\n"
     return txt
 
 def get_rank_xp_dif():
@@ -267,6 +269,42 @@ def get_rank_xp_dif():
     for i, (nome, diff) in enumerate(dados, 1):
         simbolo = "📈" if diff > 0 else "📉" if diff < 0 else "➖"
         texto += f"{i}. {nome} — {simbolo} {diff:+}\n"
+    return texto
+
+def get_rank_xp_diario():
+    query = """
+        WITH hoje AS (
+            SELECT nome, xp, nivel
+            FROM xp_logs
+            WHERE data = CURRENT_DATE
+        ),
+        anterior AS (
+            SELECT DISTINCT ON (nome) nome, xp, nivel
+            FROM xp_logs
+            WHERE data < CURRENT_DATE
+            ORDER BY nome, data DESC
+        )
+        SELECT
+            h.nome,
+            h.nivel AS nivel_atual,
+            COALESCE(a.nivel, h.nivel) AS nivel_anterior,
+            COALESCE(h.xp - a.xp, 0) AS xp_ganho
+        FROM hoje h
+        LEFT JOIN anterior a ON h.nome = a.nome
+        ORDER BY xp_ganho DESC
+    """
+    dados = execute_query(query, fetch=True)
+    if not dados:
+        return "❌ Nenhum jogador marcou presença hoje ainda"
+
+    texto = "📅 RANKING XP DO DIA\n\n"
+    for i, (nome, nivel_atual, nivel_anterior, xp_ganho) in enumerate(dados, 1):
+        if nivel_atual > nivel_anterior:
+            nivel_str = f"Lv {nivel_anterior}→{nivel_atual} 🆙"
+        else:
+            nivel_str = f"Lv {nivel_atual}"
+        simbolo = "📈" if xp_ganho > 0 else "➖"
+        texto += f"{i}. {nome} — {nivel_str} {simbolo} +{xp_ganho:,} XP\n"
     return texto
 
 # ================= RANK STATUS =================
@@ -714,6 +752,8 @@ def main():
         # XP
         app.add_handler(CommandHandler("xp", lambda u, c: u.message.reply_text(get_rank_xp())))
         app.add_handler(CommandHandler("xpdif", lambda u, c: u.message.reply_text(get_rank_xp_dif())))
+        app.add_handler(CommandHandler("xp_rank", lambda u, c: u.message.reply_text(get_rank_xp())))
+        app.add_handler(CommandHandler("xp_rank_diario", lambda u, c: u.message.reply_text(get_rank_xp_diario())))
 
         # STATUS
         app.add_handler(CommandHandler("atk", lambda u, c: u.message.reply_text(gerar_rank("atk", "ATAQUE"))))
