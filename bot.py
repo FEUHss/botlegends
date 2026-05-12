@@ -5,7 +5,7 @@ import random
 import pytz
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
@@ -177,13 +177,23 @@ def registrar_membro(nome):
 def salvar_presenca(nome):
     if not nome:
         return False
-    
+
     check_query = "SELECT 1 FROM presencas WHERE nome=%s AND data=%s"
     if execute_query(check_query, (nome, hoje()), fetch_one=True):
         return False
-    
+
     insert_query = "INSERT INTO presencas (nome,data) VALUES (%s,%s)"
-    return execute_query(insert_query, (nome, hoje()))
+    execute_query(insert_query, (nome, hoje()))
+
+    execute_query(
+        "INSERT INTO tickets(nome,semanal,mensal) VALUES(%s,0,0) ON CONFLICT DO NOTHING",
+        (nome,)
+    )
+    execute_query(
+        "UPDATE tickets SET semanal=semanal+1, mensal=mensal+1 WHERE nome=%s",
+        (nome,)
+    )
+    return True
 
 def salvar_xp(nome, xp, nivel):
     if not nome or xp is None:
@@ -351,7 +361,7 @@ def registrar_doacao(nome, valor):
         cur = conn.cursor()
         cur.execute("INSERT INTO doacoes(nome,valor,data) VALUES(%s,%s,CURRENT_DATE)", (nome, valor))
         cur.execute("UPDATE banco_guilda SET saldo=saldo+%s", (valor,))
-        t = (valor // 500) + (valor // 5000)
+        t = min(valor // 1000, 20)
 
         cur.execute("""
             INSERT INTO tickets(nome,semanal,mensal)
@@ -602,6 +612,63 @@ async def comando_resetmensal(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"❌ Erro em comando_resetmensal: {e}")
         await update.message.reply_text("❌ Erro ao resetar")
 
+# ================= GESTÃO DE TICKETS =================
+async def comando_addticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("❌ Acesso negado")
+            return
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text("❌ Uso: /addticket <nome> <qtd>")
+            return
+        nome = limpar_nome(context.args[0])
+        try:
+            qtd = int(context.args[1])
+        except ValueError:
+            await update.message.reply_text("❌ Quantidade deve ser um número")
+            return
+        if qtd <= 0:
+            await update.message.reply_text("❌ Quantidade deve ser positiva")
+            return
+        execute_query(
+            "INSERT INTO tickets(nome,semanal,mensal) VALUES(%s,0,0) ON CONFLICT DO NOTHING",
+            (nome,)
+        )
+        execute_query(
+            "UPDATE tickets SET semanal=semanal+%s, mensal=mensal+%s WHERE nome=%s",
+            (qtd, qtd, nome)
+        )
+        await update.message.reply_text(f"✅ +{qtd} tickets adicionados para {nome}")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_addticket: {e}")
+        await update.message.reply_text("❌ Erro ao adicionar tickets")
+
+async def comando_removeticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("❌ Acesso negado")
+            return
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text("❌ Uso: /removeticket <nome> <qtd>")
+            return
+        nome = limpar_nome(context.args[0])
+        try:
+            qtd = int(context.args[1])
+        except ValueError:
+            await update.message.reply_text("❌ Quantidade deve ser um número")
+            return
+        if qtd <= 0:
+            await update.message.reply_text("❌ Quantidade deve ser positiva")
+            return
+        execute_query(
+            "UPDATE tickets SET semanal=GREATEST(semanal-%s,0), mensal=GREATEST(mensal-%s,0) WHERE nome=%s",
+            (qtd, qtd, nome)
+        )
+        await update.message.reply_text(f"✅ -{qtd} tickets removidos de {nome}")
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_removeticket: {e}")
+        await update.message.reply_text("❌ Erro ao remover tickets")
+
 # ================= COFRE =================
 def registrar_item(nome, item):
     if not nome or not item:
@@ -637,6 +704,239 @@ def gerar_msg_remocao(item):
 ━━━━━━━━━━━━━━━
 🗝️ O selo foi temporariamente quebrado
 ━━━━━━━━━━━━━━━"""
+
+# ================= TASKS =================
+def iniciar_task(nome_mob):
+    if not nome_mob:
+        return None
+    ativa = execute_query("SELECT id FROM tasks WHERE status='ativa'", fetch_one=True)
+    if ativa:
+        return None
+    execute_query("INSERT INTO tasks(nome_mob) VALUES(%s)", (nome_mob,))
+    resultado = execute_query("SELECT id FROM tasks WHERE status='ativa'", fetch_one=True)
+    return resultado[0] if resultado else None
+
+def get_task_ativa():
+    return execute_query("SELECT id, nome_mob FROM tasks WHERE status='ativa'", fetch_one=True)
+
+def registrar_participacao(task_id, telegram_id, nome):
+    return execute_query("""
+        INSERT INTO task_participantes(task_id, telegram_id, nome, kills)
+        VALUES(%s,%s,%s,0) ON CONFLICT DO NOTHING
+    """, (task_id, telegram_id, nome))
+
+def registrar_kill(task_id, telegram_id):
+    return execute_query(
+        "UPDATE task_participantes SET kills=kills+1 WHERE task_id=%s AND telegram_id=%s",
+        (task_id, telegram_id)
+    )
+
+def finalizar_task(task_id):
+    participantes = execute_query(
+        "SELECT nome, kills FROM task_participantes WHERE task_id=%s ORDER BY kills DESC",
+        (task_id,), fetch=True
+    )
+    for (nome, _kills) in (participantes or []):
+        execute_query(
+            "INSERT INTO tickets(nome,semanal,mensal) VALUES(%s,0,0) ON CONFLICT DO NOTHING",
+            (nome,)
+        )
+        execute_query(
+            "UPDATE tickets SET semanal=semanal+1, mensal=mensal+1 WHERE nome=%s",
+            (nome,)
+        )
+    execute_query(
+        "UPDATE tasks SET status='finalizada', data_fim=NOW() WHERE id=%s",
+        (task_id,)
+    )
+    return participantes or []
+
+async def comando_iniciar_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("❌ Acesso negado")
+            return
+        if not context.args:
+            await update.message.reply_text("❌ Uso: /iniciar_task <nome_mob>")
+            return
+        nome_mob = " ".join(context.args).strip()[:50]
+        task_id = iniciar_task(nome_mob)
+        if task_id is None:
+            ativa = get_task_ativa()
+            await update.message.reply_text(
+                f"⚠️ Já existe uma task ativa: {ativa[1]}\nFinalize com /finalizar_task primeiro."
+            )
+            return
+        await update.message.reply_text(
+            f"⚔️ Task iniciada!\n\n🦹 Mob: {nome_mob}\n\nUse /participar_task para entrar e envie fotos dos mobs mortos!"
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_iniciar_task: {e}")
+        await update.message.reply_text("❌ Erro ao iniciar task")
+
+async def comando_participar_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        telegram_id = update.effective_user.id
+        task = get_task_ativa()
+        if not task:
+            await update.message.reply_text("❌ Nenhuma task ativa no momento")
+            return
+        task_id, nome_mob = task
+        membro = execute_query(
+            "SELECT nome FROM membros WHERE telegram_id=%s",
+            (telegram_id,), fetch_one=True
+        )
+        if not membro:
+            await update.message.reply_text(
+                "❌ Você não está vinculado. Envie seu print de presença primeiro."
+            )
+            return
+        nome = membro[0]
+        registrar_participacao(task_id, telegram_id, nome)
+        await update.message.reply_text(
+            f"⚔️ {nome} entrou na task!\n\n"
+            f"🦹 Mob: {nome_mob}\n\n"
+            f"📸 Envie fotos dos mobs mortos para registrar seus kills!"
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_participar_task: {e}")
+        await update.message.reply_text("❌ Erro ao registrar participação")
+
+async def comando_finalizar_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("❌ Acesso negado")
+            return
+        task = get_task_ativa()
+        if not task:
+            await update.message.reply_text("❌ Nenhuma task ativa")
+            return
+        task_id, nome_mob = task
+        participantes = finalizar_task(task_id)
+        if not participantes:
+            await update.message.reply_text(f"🏁 Task finalizada!\n⚔️ Mob: {nome_mob}\n\nNenhum participante.")
+            return
+        ranking = "\n".join(
+            f"{i}. {nome} — {kills} kill{'s' if kills != 1 else ''} 🎟 +1"
+            for i, (nome, kills) in enumerate(participantes, 1)
+        )
+        await update.message.reply_text(
+            f"🏁 Task finalizada!\n⚔️ Mob: {nome_mob}\n\n"
+            f"🏆 Ranking de kills:\n{ranking}"
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_finalizar_task: {e}")
+        await update.message.reply_text("❌ Erro ao finalizar task")
+
+async def detectar_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        msg = update.message
+        if not msg or msg.chat.id != GRUPO_ID:
+            return
+        if not msg.photo:
+            return
+        task = get_task_ativa()
+        if not task:
+            return
+        task_id, nome_mob = task
+        telegram_id = update.effective_user.id
+        participante = execute_query(
+            "SELECT nome FROM task_participantes WHERE task_id=%s AND telegram_id=%s",
+            (task_id, telegram_id), fetch_one=True
+        )
+        if not participante:
+            return
+        nome = participante[0]
+        registrar_kill(task_id, telegram_id)
+        kills = execute_query(
+            "SELECT kills FROM task_participantes WHERE task_id=%s AND telegram_id=%s",
+            (task_id, telegram_id), fetch_one=True
+        )
+        total = kills[0] if kills else 1
+        await msg.reply_text(
+            f"💀 Kill registrado!\n👤 {nome}\n⚔️ {nome_mob}\n🗡 Total: {total} kill{'s' if total != 1 else ''}"
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro em detectar_kill: {e}")
+
+async def detectar_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        msg = update.message
+        if not msg or msg.chat.id != GRUPO_ID:
+            return
+        if update.effective_user.id != ADMIN_ID:
+            return
+        texto = msg.text or msg.caption
+        if not texto:
+            return
+        # Extrai mob da linha com "Diária" (formato do jogo) ou usa primeira linha
+        nome_mob = None
+        for linha in texto.split("\n"):
+            if "Diária" in linha or "Diario" in linha or "Semanal" in linha:
+                nome_mob = re.sub(r"[^\w\s]", "", linha).replace("Diaria", "").replace("Diária", "").replace("Semanal", "").strip()[:50]
+                break
+        if not nome_mob:
+            nome_mob = texto.split("\n")[0].strip()[:50]
+        if not nome_mob:
+            return
+        task_id = iniciar_task(nome_mob)
+        if task_id:
+            await msg.reply_text(
+                f"⚔️ Task iniciada!\n\n🦹 Mob: {nome_mob}\n\nUse /participar_task para entrar e envie fotos dos mobs mortos!"
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro em detectar_task: {e}")
+
+# ================= SORTEIO =================
+async def realizar_sorteio(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        dados = execute_query(
+            "SELECT nome, semanal FROM tickets WHERE semanal > 0",
+            fetch=True
+        )
+        if not dados:
+            await context.bot.send_message(
+                chat_id=GRUPO_ID,
+                text="🎲 Sorteio semanal: nenhum participante com tickets esta semana."
+            )
+            return
+
+        nomes = [d[0] for d in dados]
+        pesos = [d[1] for d in dados]
+        vencedor = random.choices(nomes, weights=pesos, k=1)[0]
+
+        saldo = get_saldo()
+        premio = saldo // 2
+
+        if premio > 0:
+            execute_query("UPDATE banco_guilda SET saldo=saldo-%s", (premio,))
+
+        execute_query("UPDATE tickets SET semanal=0")
+
+        await context.bot.send_message(
+            chat_id=GRUPO_ID,
+            text=f"""🎲 SORTEIO SEMANAL — LEGENDS
+
+🏆 Vencedor: {vencedor}
+💰 Prêmio: {premio:,} gold (50% do banco)
+
+━━━━━━━━━━━━━━━
+🎟 Tickets semanais resetados
+🏦 Saldo restante: {saldo - premio:,} gold
+━━━━━━━━━━━━━━━"""
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro no sorteio: {e}")
+
+async def comando_sorteio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("❌ Acesso negado")
+            return
+        await realizar_sorteio(context)
+    except Exception as e:
+        logger.error(f"❌ Erro em comando_sorteio: {e}")
+        await update.message.reply_text("❌ Erro ao realizar sorteio")
 
 # ================= LISTA PRESENÇA =================
 def gerar_lista_texto():
@@ -727,7 +1027,12 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nivel = extrair_nivel(texto)
         dados = extrair_status(texto)
 
+        telegram_id = update.effective_user.id
         registrar_membro(nome)
+        execute_query(
+            "UPDATE membros SET telegram_id=%s WHERE nome=%s AND telegram_id IS NULL",
+            (telegram_id, nome)
+        )
         salvar_presenca(nome)
         salvar_xp(nome, xp, nivel)
         salvar_status(nome, dados)
@@ -780,8 +1085,33 @@ def main():
         # LISTA
         app.add_handler(CommandHandler("lista", comando_lista))
 
-        # DETECÇÃO
+        # TASKS
+        app.add_handler(CommandHandler("iniciar_task", comando_iniciar_task))
+        app.add_handler(CommandHandler("participar_task", comando_participar_task))
+        app.add_handler(CommandHandler("finalizar_task", comando_finalizar_task))
+
+        # TICKETS ADMIN
+        app.add_handler(CommandHandler("addticket", comando_addticket))
+        app.add_handler(CommandHandler("removeticket", comando_removeticket))
+
+        # SORTEIO
+        app.add_handler(CommandHandler("sorteio", comando_sorteio))
+
+        # DETECÇÃO DE FORWARDS (tasks) — antes do handler geral
+        app.add_handler(MessageHandler(filters.FORWARDED & filters.TEXT & ~filters.COMMAND, detectar_task))
+
+        # KILLS POR FOTO durante task ativa
+        app.add_handler(MessageHandler(filters.PHOTO, detectar_kill))
+
+        # DETECÇÃO GERAL (presença)
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, detectar))
+
+        # SORTEIO AUTOMÁTICO — todo domingo às 21h (horário de SP)
+        app.job_queue.run_daily(
+            realizar_sorteio,
+            time=dt_time(21, 0, 0, tzinfo=tz),
+            days=(6,)
+        )
 
         logger.info("🚀 BOT INICIADO COM SUCESSO")
         app.run_polling(drop_pending_updates=True)
