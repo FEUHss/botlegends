@@ -47,30 +47,75 @@ def extrair_nivel(texto):
 
 def extrair_status(texto):
     dados = {}
+
+    bonus_atk = 0
+    bonus_def = 0
+    bonus_crit = 0
+
+    atk = None
+    defesa = None
+    crit = None
+
     for linha in texto.split("\n"):
         linha = linha.strip()
 
-        if "ATK" in linha and "DEF" in linha and "CRIT" in linha:
-            n = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
-            if len(n) >= 3:
-                dados["atk"] = float(n[0])
-                dados["def"] = float(n[1])
-                dados["crit"] = float(n[2])
+        # ===== STATUS PRINCIPAIS =====
+        if (
+            "ATK" in linha
+            and "DEF" in linha
+            and "CRIT" in linha
+            and not linha.startswith("+")
+        ):
+            numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
 
+            if len(numeros) >= 3:
+                atk = float(numeros[0])
+                defesa = float(numeros[1])
+                crit = float(numeros[2])
+
+        # ===== POÇÕES =====
+        elif linha.startswith("+") and "ATK" in linha and "DEF" in linha and "CRIT" in linha:
+
+            numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
+
+            if len(numeros) >= 3:
+                bonus_atk = float(numeros[0])
+                bonus_def = float(numeros[1])
+                bonus_crit = float(numeros[2])
+
+        # ===== HP =====
         elif "HP" in linha:
-            n = re.findall(r"\d+", linha)
-            if n:
-                dados["hp"] = int(n[-1])
 
+            hp_match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
+
+            if hp_match:
+                dados["hp"] = int(hp_match.group(2))
+            else:
+                numeros = re.findall(r"\d+", linha)
+                if numeros:
+                    dados["hp"] = int(numeros[-1])
+
+        # ===== GOLD =====
         elif "Gold:" in linha:
-            n = re.findall(r"\d+", linha)
-            if n:
-                dados["gold"] = int(n[0])
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                dados["gold"] = int(numeros[0])
 
+        # ===== TOFUS =====
         elif "Tofus:" in linha:
-            n = re.findall(r"\d+", linha)
-            if n:
-                dados["tofus"] = int(n[0])
+            numeros = re.findall(r"\d+", linha)
+            if numeros:
+                dados["tofus"] = int(numeros[0])
+
+    # ===== DESCONTO DOS BUFFS =====
+    if atk is not None:
+        dados["atk"] = max(0, atk - bonus_atk)
+
+    if defesa is not None:
+        dados["def"] = max(0, defesa - bonus_def)
+
+    if crit is not None:
+        dados["crit"] = max(0, crit - bonus_crit)
 
     return dados
 
@@ -145,18 +190,31 @@ def ranking_xp():
         txt += f"{i}. {n} — Lv {l} - {xp}\n"
     return txt
 
-def ranking_status(campo,titulo):
+def ranking_status(campo, titulo):
     cur = conn.cursor()
+
     cur.execute(f"""
-    SELECT DISTINCT ON (telegram_id) nome,{campo}
-    FROM status
-    ORDER BY telegram_id,data_hora DESC
+        SELECT DISTINCT ON (telegram_id)
+               nome,
+               {campo}
+        FROM status
+        WHERE {campo} IS NOT NULL
+        ORDER BY telegram_id, data_hora DESC
     """)
-    d = sorted(cur.fetchall(), key=lambda x: (x[1] or 0), reverse=True)
-    txt = f"🏆 {titulo}\n\n"
-    for i,(n,v) in enumerate(d,1):
-        txt += f"{i}. {n} — {v}\n"
-    return txt
+
+    dados = cur.fetchall()
+
+    dados.sort(
+        key=lambda x: float(x[1]) if x[1] is not None else 0,
+        reverse=True
+    )
+
+    texto = f"🏆 {titulo}\n\n"
+
+    for i, (nome, valor) in enumerate(dados, 1):
+        texto += f"{i}. {nome} — {valor}\n"
+
+    return texto
 
 def ranking_xpdif():
     cur = conn.cursor()
@@ -220,7 +278,7 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if novo:
         await msg.reply_text(f"✅ Presença registrada: {nome}")
     else:
-        await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")
+        await msg.reply_text(f"{nome} Dados atalizados")
 
 def main():
     print("1 - Entrou no main")
