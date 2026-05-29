@@ -59,29 +59,37 @@ def extrair_status(texto):
     for linha in texto.split("\n"):
         linha = linha.strip()
 
-        # ===== STATUS PRINCIPAIS =====
-        if (
-            "ATK" in linha
-            and "DEF" in linha
-            and "CRIT" in linha
-            and not linha.startswith("+")
-        ):
-            numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
+        # STATUS PRINCIPAIS
+        if "ATK" in linha and "DEF" in linha and "CRIT" in linha and "+" not in linha:
 
-            if len(numeros) >= 3:
-                atk = float(numeros[0])
-                defesa = float(numeros[1])
-                crit = float(numeros[2])
+            atk_match = re.search(r"ATK\s+(\d+\.?\d*)", linha)
+            def_match = re.search(r"DEF\s+(\d+\.?\d*)", linha)
+            crit_match = re.search(r"CRIT\s+(\d+\.?\d*)", linha)
 
-        # ===== POÇÕES =====
-        elif linha.startswith("+") and "ATK" in linha and "DEF" in linha and "CRIT" in linha:
+            if atk_match:
+                atk = float(atk_match.group(1))
 
-            numeros = re.findall(r"\d+\.?\d*", linha.replace(",", "."))
+            if def_match:
+                defesa = float(def_match.group(1))
 
-            if len(numeros) >= 3:
-                bonus_atk = float(numeros[0])
-                bonus_def = float(numeros[1])
-                bonus_crit = float(numeros[2])
+            if crit_match:
+                crit = float(crit_match.group(1))
+
+        # POÇÕES
+        elif "+" in linha and "ATK" in linha and "DEF" in linha and "CRIT" in linha:
+
+            atk_match = re.search(r"\+(\d+\.?\d*)\s*ATK", linha)
+            def_match = re.search(r"\+(\d+\.?\d*)\s*DEF", linha)
+            crit_match = re.search(r"\+(\d+\.?\d*)\s*%?\s*CRIT", linha)
+
+            if atk_match:
+                bonus_atk = float(atk_match.group(1))
+
+            if def_match:
+                bonus_def = float(def_match.group(1))
+
+            if crit_match:
+                bonus_crit = float(crit_match.group(1))
 
         # ===== HP =====
         elif "HP" in linha:
@@ -97,17 +105,22 @@ def extrair_status(texto):
 
         # ===== GOLD =====
         elif "Gold:" in linha:
+
             numeros = re.findall(r"\d+", linha)
+
             if numeros:
                 dados["gold"] = int(numeros[0])
 
         # ===== TOFUS =====
         elif "Tofus:" in linha:
+
             numeros = re.findall(r"\d+", linha)
+
             if numeros:
                 dados["tofus"] = int(numeros[0])
 
-    # ===== DESCONTO DOS BUFFS =====
+    # ===== APLICA DESCONTO DAS POÇÕES =====
+
     if atk is not None:
         dados["atk"] = max(0, atk - bonus_atk)
 
