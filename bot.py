@@ -223,7 +223,11 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(f"⚠️ {nome} já marcou presença hoje")
 
 def main():
+    print("1 - Entrou no main")
+
     app = ApplicationBuilder().token(TOKEN).build()
+
+    print("2 - Application criada")
 
     app.add_handler(CommandHandler("lista", cmd_lista))
     app.add_handler(CommandHandler("xp", cmd_xp))
@@ -234,9 +238,25 @@ def main():
     app.add_handler(CommandHandler("hp", lambda u,c: u.message.reply_text(ranking_status("hp","HP"))))
     app.add_handler(CommandHandler("crit", lambda u,c: u.message.reply_text(ranking_status("crit","CRÍTICO"))))
 
-    app.add_handler(MessageHandler(filters.TEXT | filters.CaptionRegex(".*"), detectar))
+    print("3 - Handlers registrados")
 
-    app.run_polling(drop_pending_updates=True)
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT | filters.CaptionRegex(".*"),
+            detectar
+        )
+    )
+
+    print("4 - Iniciando polling")
+
+    app.run_polling(
+        drop_pending_updates=True,
+        timeout=30,
+        read_timeout=30,
+        write_timeout=30,
+        connect_timeout=30,
+        pool_timeout=30
+    )
 
 if __name__ == "__main__":
     main()
