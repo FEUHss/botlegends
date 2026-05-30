@@ -153,12 +153,30 @@ def salvar_presenca(tg_id,nome):
     return inseriu
 
 def salvar_xp(tg_id,nome,xp,nivel):
-    if xp is None: return
+
+    if xp is None:
+        return
+
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT xp
+        FROM xp_logs
+        WHERE telegram_id=%s
+        ORDER BY data_hora DESC
+        LIMIT 1
+    """, (tg_id,))
+
+    ultimo = cur.fetchone()
+
+    if ultimo and ultimo[0] == xp:
+        return
+
     cur.execute(
         "INSERT INTO xp_logs (telegram_id,nome,xp,nivel) VALUES (%s,%s,%s,%s)",
         (tg_id,nome,xp,nivel)
     )
+
     conn.commit()
 
 def salvar_status(tg_id,nome,d):
@@ -231,31 +249,73 @@ def ranking_status(campo, titulo):
 
 def ranking_xpdif():
     cur = conn.cursor()
+
     cur.execute("""
-    SELECT telegram_id,nome,xp,
-           ROW_NUMBER() OVER(PARTITION BY telegram_id ORDER BY data_hora DESC) rn
-    FROM xp_logs
+        SELECT telegram_id, nome, xp, data_hora
+        FROM xp_logs
+        ORDER BY telegram_id, data_hora ASC
     """)
+
     rows = cur.fetchall()
 
+    hoje_data = hoje()
     dados = {}
-    for tg,n,xp,rn in rows:
-        dados.setdefault(tg, {"nome":n})
-        if rn == 1: dados[tg]["ult"] = xp
-        if rn == 2: dados[tg]["pen"] = xp
 
-    res = []
-    for v in dados.values():
-        diff = v.get("ult",0) - v.get("pen",v.get("ult",0))
-        res.append((v["nome"], diff))
+    for tg_id, nome, xp, data_hora in rows:
 
-    res.sort(key=lambda x:x[1], reverse=True)
+        data_registro = data_hora.astimezone(tz).date()
 
-    txt = "📊 VARIAÇÃO XP\n\n"
-    for i,(n,d) in enumerate(res,1):
-        s = "📈" if d>0 else "➖"
-        txt += f"{i}. {n} — {s} {d:+}\n"
-    return txt
+        if tg_id not in dados:
+            dados[tg_id] = {
+                "nome": nome,
+                "base": None,
+                "ultimo": xp,
+                "ultimo_ontem": None
+            }
+
+        dados[tg_id]["ultimo"] = xp
+
+        if data_registro < hoje_data:
+            dados[tg_id]["ultimo_ontem"] = xp
+
+        elif data_registro == hoje_data and dados[tg_id]["base"] is None:
+            dados[tg_id]["base"] = xp
+
+    resultado = []
+
+    for jogador in dados.values():
+
+        if jogador["ultimo_ontem"] is not None:
+            base = jogador["ultimo_ontem"]
+        else:
+            base = jogador["base"]
+
+        if base is None:
+            continue
+
+        ganho = jogador["ultimo"] - base
+
+        resultado.append(
+            (
+                jogador["nome"],
+                ganho
+            )
+        )
+
+    resultado.sort(
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    texto = "📊 VARIAÇÃO XP (HOJE)\n\n"
+
+    for pos, (nome, ganho) in enumerate(resultado, 1):
+
+        emoji = "📈" if ganho > 0 else "➖"
+
+        texto += f"{pos}. {nome} — {emoji} {ganho:+}\n"
+
+    return texto
 
 async def cmd_lista(update, context):
     await update.message.reply_text(gerar_lista())
