@@ -629,14 +629,6 @@ def main():
 
     print("3 - Handlers registrados")
 
-    # DETECTOR DE CAÇADAS
-    app.add_handler(
-        MessageHandler(
-            filters.ALL,
-            detectar_cacada
-        )
-    )
-
     # DETECTOR DE PERFIS
     app.add_handler(
         MessageHandler(
