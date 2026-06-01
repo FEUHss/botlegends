@@ -11,6 +11,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 GRUPO_ID = -1003792787717
 TOPICO_PRESENCA = 16325
+TOPICO_LOOTS = 19
 
 conn = psycopg2.connect(DATABASE_URL)
 tz = pytz.timezone("America/Sao_Paulo")
@@ -190,6 +191,120 @@ def salvar_status(tg_id,nome,d):
          d.get("hp"),d.get("gold"),d.get("tofus")))
     conn.commit()
 
+def buscar_nome_por_id(tg_id):
+
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT nome FROM membros WHERE telegram_id=%s",
+        (tg_id,)
+    )
+
+    row = cur.fetchone()
+
+    return row[0] if row else None
+
+def extrair_cacada(texto):
+
+    if "RESUMO DA CAÇADA EM DUPLA" not in texto:
+        return None
+
+    dados = {
+        "xp": 0,
+        "gold": 0,
+        "lendarios": 0,
+        "pvps": 0
+    }
+
+    xp_match = re.search(
+        r"Total recebido:\s*([\d,.]+)\s*XP|XP recebido:\s*([\d,.]+)\s*XP",
+        texto
+    )
+
+    if xp_match:
+
+        valor = xp_match.group(1) or xp_match.group(2)
+
+        dados["xp"] = int(
+            valor.replace(",", "").replace(".", "")
+        )
+
+    gold_match = re.search(
+        r"Gold recebido:\s*([\d,.]+)",
+        texto
+    )
+
+    if gold_match:
+
+        dados["gold"] = int(
+            gold_match.group(1)
+            .replace(",", "")
+            .replace(".", "")
+        )
+
+    lendarios = 0
+
+    for linha in texto.split("\n"):
+
+        linha = linha.strip()
+
+        if (
+            "Tônico" not in linha
+            and "Poção" not in linha
+            and "Chave" not in linha
+            and "XP" not in linha
+            and "Gold" not in linha
+            and linha
+        ):
+
+            if (
+                "Drops:" not in linha
+                and "Equipes eliminadas" not in linha
+            ):
+                pass
+
+    lendarios = texto.count("🟠")
+
+    if "Equipes eliminadas:" in texto:
+
+        dados["pvps"] = len(
+            re.findall(r"→", texto)
+        )
+
+    dados["lendarios"] = lendarios
+
+    return dados
+
+def salvar_cacada(tg_id, nome, dados):
+
+    if not dados:
+        return
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO cacadas
+        (
+            telegram_id,
+            nome,
+            xp,
+            gold,
+            lendarios,
+            pvps
+        )
+        VALUES (%s,%s,%s,%s,%s,%s)
+    """,
+    (
+        tg_id,
+        nome,
+        dados["xp"],
+        dados["gold"],
+        dados["lendarios"],
+        dados["pvps"]
+    ))
+
+    conn.commit()
+
 def gerar_lista():
     cur = conn.cursor()
 
@@ -353,6 +468,111 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text(f"{nome} Dados atalizados")
 
+async def detectar_cacada(update, context):
+
+    msg = update.message
+
+    if not msg:
+        return
+
+    texto = msg.text or msg.caption
+
+    if not texto:
+        return
+
+    eh_privado = msg.chat.type == "private"
+
+    eh_loot = (
+        msg.chat.id == GRUPO_ID
+        and msg.message_thread_id == TOPICO_LOOTS
+    )
+
+    if not eh_privado and not eh_loot:
+        return
+
+    dados = extrair_cacada(texto)
+
+    if not dados:
+        return
+
+    tg_id = msg.from_user.id
+
+    nome = buscar_nome_por_id(tg_id)
+
+    if not nome:
+        await msg.reply_text(
+            "⚠ Você ainda não possui perfil cadastrado."
+        )
+        return
+
+    salvar_cacada(
+        tg_id,
+        nome,
+        dados
+    )
+
+    await msg.reply_text(
+        f"🏹 Boa {nome}! Dados da caçada salvos."
+    )
+
+async def cmd_cacada(update, context):
+
+    tg_id = update.effective_user.id
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            COALESCE(SUM(xp),0),
+            COALESCE(SUM(gold),0),
+            COALESCE(SUM(lendarios),0),
+            COALESCE(SUM(pvps),0)
+        FROM cacadas
+        WHERE telegram_id=%s
+    """,(tg_id,))
+
+    xp,gold,lend,pvp = cur.fetchone()
+
+    nome = buscar_nome_por_id(tg_id)
+
+    texto = (
+        f"🏹 RESUMO DE CAÇADA\n\n"
+        f"👤 {nome}\n\n"
+        f"📦 XP acumulado: {xp:,}\n"
+        f"💰 Gold acumulado: {gold:,}\n"
+        f"🟠 Lendários: {lend}\n"
+        f"⚔ PvPs vencidos: {pvp}"
+    )
+
+    await update.message.reply_text(texto)
+
+async def cmd_pvp(update, context):
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            nome,
+            SUM(pvps)
+        FROM cacadas
+        GROUP BY nome
+        HAVING SUM(pvps) > 0
+        ORDER BY SUM(pvps) DESC
+        LIMIT 20
+    """)
+
+    rows = cur.fetchall()
+
+    texto = "⚔ RANKING DE CAÇADORES\n\n"
+
+    for i,(nome,pvps) in enumerate(rows,1):
+
+        texto += (
+            f"{i}. {nome} — {pvps} PvPs\n"
+        )
+
+    await update.message.reply_text(texto)
+
 def main():
     print("1 - Entrou no main")
 
@@ -360,17 +580,61 @@ def main():
 
     print("2 - Application criada")
 
+    # COMANDOS
     app.add_handler(CommandHandler("lista", cmd_lista))
     app.add_handler(CommandHandler("xp", cmd_xp))
     app.add_handler(CommandHandler("xpdif", cmd_xpdif))
 
-    app.add_handler(CommandHandler("atk", lambda u,c: u.message.reply_text(ranking_status("atk","ATAQUE"))))
-    app.add_handler(CommandHandler("def", lambda u,c: u.message.reply_text(ranking_status("def","DEFESA"))))
-    app.add_handler(CommandHandler("hp", lambda u,c: u.message.reply_text(ranking_status("hp","HP"))))
-    app.add_handler(CommandHandler("crit", lambda u,c: u.message.reply_text(ranking_status("crit","CRÍTICO"))))
+    app.add_handler(CommandHandler("cacada", cmd_cacada))
+    app.add_handler(CommandHandler("pvp", cmd_pvp))
+
+    app.add_handler(
+        CommandHandler(
+            "atk",
+            lambda u, c: u.message.reply_text(
+                ranking_status("atk", "ATAQUE")
+            )
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "def",
+            lambda u, c: u.message.reply_text(
+                ranking_status("def", "DEFESA")
+            )
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "hp",
+            lambda u, c: u.message.reply_text(
+                ranking_status("hp", "HP")
+            )
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "crit",
+            lambda u, c: u.message.reply_text(
+                ranking_status("crit", "CRÍTICO")
+            )
+        )
+    )
 
     print("3 - Handlers registrados")
 
+    # DETECTOR DE CAÇADAS
+    app.add_handler(
+        MessageHandler(
+            filters.ALL,
+            detectar_cacada
+        )
+    )
+
+    # DETECTOR DE PERFIS
     app.add_handler(
         MessageHandler(
             filters.TEXT | filters.CaptionRegex(".*"),
@@ -391,3 +655,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
