@@ -473,50 +473,63 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def detectar_cacada(update, context):
 
-    msg = update.message
+    try:
 
-    if not msg:
-        return
+        msg = update.message
 
-    texto = msg.text or msg.caption
+        if not msg:
+            return
 
-    if not texto:
-        return
+        eh_privado = msg.chat.type == "private"
 
-    eh_privado = msg.chat.type == "private"
-
-    eh_loot = (
-        msg.chat.id == GRUPO_ID
-        and msg.message_thread_id == TOPICO_LOOTS
-    )
-
-    if not eh_privado and not eh_loot:
-        return
-
-    dados = extrair_cacada(texto)
-
-    if not dados:
-        return
-
-    tg_id = msg.from_user.id
-
-    nome = buscar_nome_por_id(tg_id)
-
-    if not nome:
-        await msg.reply_text(
-            "⚠ Você ainda não possui perfil cadastrado."
+        eh_loot = (
+            msg.chat.id == GRUPO_ID
+            and msg.message_thread_id == TOPICO_LOOTS
         )
-        return
 
-    salvar_cacada(
-        tg_id,
-        nome,
-        dados
-    )
+        # Só processa PV ou tópico de LOOTS
+        if not eh_privado and not eh_loot:
+            return
 
-    await msg.reply_text(
-        f"🏹 Boa {nome}! Dados da caçada salvos."
-    )
+        texto = msg.text or msg.caption
+
+        if not texto:
+            return
+
+        # Só processa resumos de caçada
+        if "RESUMO DA CAÇADA EM DUPLA" not in texto:
+            return
+
+        dados = extrair_cacada(texto)
+
+        if not dados:
+            return
+
+        tg_id = msg.from_user.id
+
+        nome = buscar_nome_por_id(tg_id)
+
+        if not nome:
+
+            await msg.reply_text(
+                "⚠ Você precisa primero cadastrar seu perfil uma vez encaminhando ele na aba Presença"
+            )
+
+            return
+
+        salvar_cacada(
+            tg_id,
+            nome,
+            dados
+        )
+
+        await msg.reply_text(
+            f"🏹 Boa {nome}! Dados da caçada salvos."
+        )
+
+    except Exception as e:
+
+        print(f"ERRO DETECTAR_CACADA: {e}")
 
 async def cmd_cacada(update, context):
 
@@ -628,6 +641,14 @@ def main():
     )
 
     print("3 - Handlers registrados")
+
+    # DETECTOR DE CAÇADAS
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT | filters.CaptionRegex(".*"),
+            detectar_cacada
+        )
+    )
 
     # DETECTOR DE PERFIS
     app.add_handler(
