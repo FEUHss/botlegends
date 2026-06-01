@@ -442,6 +442,9 @@ async def cmd_xpdif(update, context):
     await update.message.reply_text(ranking_xpdif())
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    print("ENTROU NO DETECTAR PERFIL")
+
     msg = update.message
     if not msg: return
     if msg.chat.id != GRUPO_ID: return
