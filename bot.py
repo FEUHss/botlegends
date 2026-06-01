@@ -443,93 +443,105 @@ async def cmd_xpdif(update, context):
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    print("ENTROU NO DETECTAR PERFIL")
-
     msg = update.message
-    if not msg: return
-    if msg.chat.id != GRUPO_ID: return
-    if msg.message_thread_id != TOPICO_PRESENCA: return
+
+    if not msg:
+        return
 
     texto = msg.text or msg.caption
-    if not texto: return
+
+    if not texto:
+        return
+
+    # =========================
+    # CAÇADA EM DUPLA
+    # =========================
+
+    eh_privado = msg.chat.type == "private"
+
+    eh_loot = (
+        msg.chat.id == GRUPO_ID
+        and msg.message_thread_id == TOPICO_LOOTS
+    )
+
+    if eh_privado or eh_loot:
+
+        dados_cacada = extrair_cacada(texto)
+
+        if dados_cacada:
+
+            tg_id = msg.from_user.id
+
+            nome = buscar_nome_por_id(tg_id)
+
+            if not nome:
+
+                await msg.reply_text(
+                    "⚠ Você ainda não possui perfil cadastrado."
+                )
+
+                return
+
+            salvar_cacada(
+                tg_id,
+                nome,
+                dados_cacada
+            )
+
+            await msg.reply_text(
+                f"🏹 Boa {nome}! Dados da caçada salvos."
+            )
+
+            return
+
+    # =========================
+    # PRESENÇA
+    # =========================
+
+    if msg.chat.id != GRUPO_ID:
+        return
+
+    if msg.message_thread_id != TOPICO_PRESENCA:
+        return
 
     nome = extrair_nome(texto)
-    if not nome: return
+
+    if not nome:
+        return
 
     tg_id = msg.from_user.id
     xp = extrair_xp(texto)
     nivel = extrair_nivel(texto)
     status = extrair_status(texto)
 
-    registrar_membro(tg_id,nome)
-    novo = salvar_presenca(tg_id,nome)
-    salvar_xp(tg_id,nome,xp,nivel)
-    salvar_status(tg_id,nome,status)
+    registrar_membro(tg_id, nome)
+
+    novo = salvar_presenca(
+        tg_id,
+        nome
+    )
+
+    salvar_xp(
+        tg_id,
+        nome,
+        xp,
+        nivel
+    )
+
+    salvar_status(
+        tg_id,
+        nome,
+        status
+    )
 
     if novo:
-        await msg.reply_text(f"✅ Presença registrada: {nome}")
-    else:
-        await msg.reply_text(f"{nome} Dados atalizados")
-
-async def detectar_cacada(update, context):
-
-    try:
-
-        msg = update.message
-
-        if not msg:
-            return
-
-        eh_privado = msg.chat.type == "private"
-
-        eh_loot = (
-            msg.chat.id == GRUPO_ID
-            and msg.message_thread_id == TOPICO_LOOTS
-        )
-
-        # Só processa PV ou tópico de LOOTS
-        if not eh_privado and not eh_loot:
-            return
-
-        texto = msg.text or msg.caption
-
-        if not texto:
-            return
-
-        # Só processa resumos de caçada
-        if "RESUMO DA CAÇADA EM DUPLA" not in texto:
-            return
-
-        dados = extrair_cacada(texto)
-
-        if not dados:
-            return
-
-        tg_id = msg.from_user.id
-
-        nome = buscar_nome_por_id(tg_id)
-
-        if not nome:
-
-            await msg.reply_text(
-                "⚠ Você precisa primero cadastrar seu perfil uma vez encaminhando ele na aba Presença"
-            )
-
-            return
-
-        salvar_cacada(
-            tg_id,
-            nome,
-            dados
-        )
-
         await msg.reply_text(
-            f"🏹 Boa {nome}! Dados da caçada salvos."
+            f"✅ Presença registrada: {nome}"
         )
-
-    except Exception as e:
-
-        print(f"ERRO DETECTAR_CACADA: {e}")
+    else:
+        await msg.reply_text(
+            f"{nome} Dados atualizados"
+        )
 
 async def cmd_cacada(update, context):
 
@@ -641,14 +653,6 @@ def main():
     )
 
     print("3 - Handlers registrados")
-
-    # DETECTOR DE CAÇADAS
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT | filters.CaptionRegex(".*"),
-            detectar_cacada
-        )
-    )
 
     # DETECTOR DE PERFIS
     app.add_handler(
