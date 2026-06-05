@@ -361,46 +361,46 @@ def extrair_gibby(texto):
 
     if "FALHA CATASTRÓFICA" in texto:
 
-    match = re.search(
-        r"Ambos os (.+?) \+(\d)",
-        texto
-    )
-
-    if match:
-
-        item = match.group(1).strip()
-
-        nivel_origem = int(match.group(2))
-        nivel_destino = nivel_origem + 1
-
-    else:
-
         match = re.search(
-            r"Ambos os (.+?) explodiram",
+            r"Ambos os (.+?) \+(\d)",
             texto
         )
 
-        if not match:
-            return None
+        if match:
 
-        item = match.group(1).strip()
+            item = match.group(1).strip()
 
-        nivel_origem = 0
-        nivel_destino = 1
+            nivel_origem = int(match.group(2))
+            nivel_destino = nivel_origem + 1
 
-    itens_base = {
-        1: 2,
-        2: 4,
-        3: 8
-    }.get(nivel_destino, 0)
+        else:
 
-    return {
-        "item": item,
-        "nivel_origem": nivel_origem,
-        "nivel_destino": nivel_destino,
-        "resultado": "FALHA",
-        "itens_base": itens_base
-    }
+            match = re.search(
+                r"Ambos os (.+?) explodiram",
+                texto
+            )
+
+            if not match:
+                return None
+
+            item = match.group(1).strip()
+
+            nivel_origem = 0
+            nivel_destino = 1
+
+        itens_base = {
+            1: 2,
+            2: 4,
+            3: 8
+        }.get(nivel_destino, 0)
+
+        return {
+            "item": item,
+            "nivel_origem": nivel_origem,
+            "nivel_destino": nivel_destino,
+            "resultado": "FALHA",
+            "itens_base": itens_base
+        }
 
     return None
 
