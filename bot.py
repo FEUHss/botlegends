@@ -873,6 +873,131 @@ async def cmd_pvp(update, context):
 
     await update.message.reply_text(texto)
 
+async def cmd_gibby(update, context):
+
+    if not comando_permitido(update.message):
+        return
+
+    tg_id = update.effective_user.id
+
+    cur = conn.cursor()
+
+    # martelos usados
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM gibby_logs
+        WHERE telegram_id=%s
+    """,(tg_id,))
+
+    martelos = cur.fetchone()[0]
+
+    # itens base
+    cur.execute("""
+        SELECT COALESCE(
+            SUM(itens_base_consumidos),
+            0
+        )
+        FROM gibby_logs
+        WHERE telegram_id=%s
+    """,(tg_id,))
+
+    itens_base = cur.fetchone()[0]
+
+    # taxa geral
+    cur.execute("""
+        SELECT
+            COUNT(*),
+            SUM(
+                CASE
+                    WHEN resultado='SUCESSO'
+                    THEN 1
+                    ELSE 0
+                END
+            )
+        FROM gibby_logs
+        WHERE telegram_id=%s
+    """,(tg_id,))
+
+    total, sucessos = cur.fetchone()
+
+    sucessos = sucessos or 0
+
+    taxa_geral = (
+        sucessos * 100 / total
+        if total
+        else 0
+    )
+
+    # itens registrados
+    cur.execute("""
+        SELECT DISTINCT item
+        FROM gibby_logs
+        WHERE telegram_id=%s
+        ORDER BY item
+    """,(tg_id,))
+
+    itens = [x[0] for x in cur.fetchall()]
+
+    nome = buscar_nome_por_id(tg_id)
+
+    texto = (
+        f"🔨 LIVRO DA FORJA DO GIBBY\n\n"
+        f"👤 {nome}\n\n"
+        f"🔨 Martelos usados: {martelos}\n\n"
+        f"📦 Itens base consumidos: {itens_base}\n\n"
+    )
+
+    for nivel in [1,2,3]:
+
+        cur.execute("""
+            SELECT
+                COUNT(*),
+                SUM(
+                    CASE
+                        WHEN resultado='SUCESSO'
+                        THEN 1
+                        ELSE 0
+                    END
+                )
+            FROM gibby_logs
+            WHERE telegram_id=%s
+            AND nivel_destino=%s
+        """,(tg_id,nivel))
+
+        total_nivel, sucesso_nivel = cur.fetchone()
+
+        sucesso_nivel = sucesso_nivel or 0
+
+        taxa = (
+            sucesso_nivel * 100 / total_nivel
+            if total_nivel
+            else 0
+        )
+
+        estrelas = "⭐" * nivel
+
+        texto += (
+            f"{estrelas} - 🎯 {taxa:.1f}%\n\n"
+        )
+
+    texto += (
+        f"🏆 Taxa geral\n"
+        f"🎯 {taxa_geral:.1f}%\n\n"
+        f"📜 ITENS REGISTRADOS\n\n"
+    )
+
+    for i,item in enumerate(itens,1):
+
+        texto += f"{i}. {item}\n"
+
+    texto += (
+        "\nℹ️ Use /gibby <número> "
+        "para consultar os detalhes de um item.\n"
+        "Exemplo: /gibby 1"
+    )
+
+    await update.message.reply_text(texto)
+
 def main():
     print("1 - Entrou no main")
 
@@ -887,6 +1012,13 @@ def main():
 
     app.add_handler(CommandHandler("cacada", cmd_cacada))
     app.add_handler(CommandHandler("pvp", cmd_pvp))
+
+    app.add_handler(
+        CommandHandler(
+            "gibby",
+            cmd_gibby
+        )
+    )
 
     app.add_handler(
         CommandHandler(
