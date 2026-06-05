@@ -873,12 +873,159 @@ async def cmd_pvp(update, context):
 
     await update.message.reply_text(texto)
 
+async def mostrar_item_gibby(
+    update,
+    tg_id,
+    item
+):
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            nivel_destino,
+            resultado
+        FROM gibby_logs
+        WHERE telegram_id=%s
+        AND item=%s
+    """,
+    (
+        tg_id,
+        item
+    ))
+
+    rows = cur.fetchall()
+
+    usados = len(rows)
+
+    itens_base = 0
+
+    s1=f1=s2=f2=s3=f3=0
+
+    for nivel, resultado in rows:
+
+        if nivel == 1:
+
+            itens_base += 2
+
+            if resultado == "SUCESSO":
+                s1 += 1
+            else:
+                f1 += 1
+
+        elif nivel == 2:
+
+            itens_base += 4
+
+            if resultado == "SUCESSO":
+                s2 += 1
+            else:
+                f2 += 1
+
+        elif nivel == 3:
+
+            itens_base += 8
+
+            if resultado == "SUCESSO":
+                s3 += 1
+            else:
+                f3 += 1
+
+    def pct(s,f):
+
+        total = s + f
+
+        if total == 0:
+            return 0
+
+        return round(
+            s * 100 / total,
+            1
+        )
+
+    total_s = s1+s2+s3
+    total_f = f1+f2+f3
+
+    geral = pct(
+        total_s,
+        total_f
+    )
+
+    nome = buscar_nome_por_id(tg_id)
+
+    texto = (
+        f"👤 {nome}\n\n"
+        f"📿 {item}\n\n"
+        f"🔨 Martelos usados: {usados}\n"
+        f"📦 Itens base consumidos: {itens_base}\n\n"
+        f"⭐ +1\n"
+        f"✅ {s1} sucessos\n"
+        f"❌ {f1} falhas\n"
+        f"🎯 {pct(s1,f1)}%\n\n"
+        f"⭐⭐ +2\n"
+        f"✅ {s2} sucessos\n"
+        f"❌ {f2} falhas\n"
+        f"🎯 {pct(s2,f2)}%\n\n"
+        f"⭐⭐⭐ +3\n"
+        f"✅ {s3} sucessos\n"
+        f"❌ {f3} falhas\n"
+        f"🎯 {pct(s3,f3)}%\n\n"
+        f"🏆 Taxa geral\n"
+        f"🎯 {geral}%"
+    )
+
+    await update.message.reply_text(texto)
+
 async def cmd_gibby(update, context):
 
     if not comando_permitido(update.message):
         return
 
     tg_id = update.effective_user.id
+
+    # CONSULTA DE ITEM
+
+    if context.args:
+
+        try:
+            numero = int(context.args[0])
+
+        except:
+
+            await update.message.reply_text(
+                "Use /gibby <número>"
+            )
+
+            return
+
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT DISTINCT item
+            FROM gibby_logs
+            WHERE telegram_id=%s
+            ORDER BY item
+        """,(tg_id,))
+
+        itens = [x[0] for x in cur.fetchall()]
+
+        if numero < 1 or numero > len(itens):
+
+            await update.message.reply_text(
+                "❌ Item não encontrado."
+            )
+
+            return
+
+        item = itens[numero - 1]
+
+        await mostrar_item_gibby(
+            update,
+            tg_id,
+            item
+        )
+
+        return
 
     cur = conn.cursor()
 
