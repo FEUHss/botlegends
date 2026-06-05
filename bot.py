@@ -802,11 +802,11 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if novo:
         await msg.reply_text(
-            f"✅ Presença registrada: {nome}"
+            f"✅ Primeiro perfil do dia registrado {nome}"
         )
     else:
         await msg.reply_text(
-            f"{nome} Dados atualizados"
+            f"{nome} Dados do dia atualizados"
         )
 
 async def cmd_cacada(update, context):
