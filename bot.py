@@ -218,6 +218,39 @@ def buscar_nome_por_id(tg_id):
 
     return row[0] if row else None
 
+    import random
+
+    MSG_GIBBY_SUCESSO_1 = [
+        "🔨 O Gibby bateu torto, mas bateu certo. {item} alcançou +1.",
+        "🍺 Gibby jurou que sabia o que estava fazendo. E funcionou.",
+        "✨ O martelo cantou, as runas brilharam e {item} virou +1.",
+        "🛠 Depois de muito barulho e pouca técnica, sucesso.",
+        "🔥 Os espíritos da forja aprovaram a tentativa.",
+        "🏹 O Rastreador anota mais uma vitória nos livros da forja."
+    ]
+
+    MSG_GIBBY_SUCESSO_2 = [
+        "⚡ O impossível aconteceu. {item} alcançou +2.",
+        "🍀 Alguém claramente roubou sorte hoje.",
+        "🔨 O velho Gibby tropeçou e acertou o golpe perfeito.",
+        "📜 Mais um registro glorioso para os livros da forja.",
+        "🔥 As chamas aceitaram o sacrifício.",
+        "🏆 O martelo venceu a estatística."
+    ]
+
+    MSG_GIBBY_SUCESSO_3 = [
+        "👑 LENDA! {item} alcançou +3. Os livros da forja registrarão este feito por gerações."
+    ]
+
+    MSG_GIBBY_FALHA = [
+        "💀 Gibby cobrou o preço. {item} virou pó.",
+        "🪦 Os espíritos da forja rejeitaram a tentativa.",
+        "🔥 O martelo venceu. O item perdeu.",
+        "🍺 Gibby garante que da próxima vez funciona.",
+        "⚰ Mais um item tombou diante da estatística.",
+        "📉 O ouro foi gasto. A tristeza foi gratuita."
+    ]
+
 def extrair_cacada(texto):
 
     if "RESUMO DA CAÇADA EM DUPLA" not in texto:
@@ -289,6 +322,75 @@ def extrair_cacada(texto):
 
     return dados
 
+def extrair_gibby(texto):
+
+    texto = texto.strip()
+
+    # ===== SUCESSO =====
+
+    if "SUCESSO!" in texto:
+
+        match = re.search(
+            r"(.+?) foi forjado .* evoluiu para \+(\d)",
+            texto,
+            re.DOTALL
+        )
+
+        if not match:
+            return None
+
+        item = match.group(1).strip()
+
+        nivel_destino = int(match.group(2))
+        nivel_origem = nivel_destino - 1
+
+        itens_base = {
+            1: 2,
+            2: 4,
+            3: 8
+        }.get(nivel_destino, 0)
+
+        return {
+            "item": item,
+            "nivel_origem": nivel_origem,
+            "nivel_destino": nivel_destino,
+            "resultado": "SUCESSO",
+            "itens_base": itens_base
+        }
+
+    # ===== FALHA =====
+
+    if "FALHA CATASTRÓFICA" in texto:
+
+        match = re.search(
+            r"Ambos os (.+?) \+(\d)",
+            texto
+        )
+
+        if not match:
+            return None
+
+        item = match.group(1).strip()
+
+        nivel_origem = int(match.group(2))
+        nivel_destino = nivel_origem + 1
+
+        itens_base = {
+            1: 2,
+            2: 4,
+            3: 8
+        }.get(nivel_destino, 0)
+
+        return {
+            "item": item,
+            "nivel_origem": nivel_origem,
+            "nivel_destino": nivel_destino,
+            "resultado": "FALHA",
+            "itens_base": itens_base
+        }
+
+    return None
+
 def salvar_cacada(tg_id, nome, dados):
 
     if not dados:
@@ -315,6 +417,43 @@ def salvar_cacada(tg_id, nome, dados):
         dados["gold"],
         dados["lendarios"],
         dados["pvps"]
+    ))
+
+    conn.commit()
+
+def salvar_gibby(
+    tg_id,
+    nome,
+    item,
+    nivel_origem,
+    nivel_destino,
+    resultado,
+    itens_base
+):
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO gibby_logs
+        (
+            telegram_id,
+            nome,
+            item,
+            nivel_origem,
+            nivel_destino,
+            resultado,
+            itens_base_consumidos
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
+    """,
+    (
+        tg_id,
+        nome,
+        item,
+        nivel_origem,
+        nivel_destino,
+        resultado,
+        itens_base
     ))
 
     conn.commit()
@@ -522,6 +661,77 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await msg.reply_text(
                 f"🏹 Boa {nome}! Dados da caçada salvos."
+            )
+
+            return
+
+    # =========================
+    # FORJA DO GIBBY
+    # =========================
+
+    eh_gibby = (
+        msg.chat.id == GRUPO_ID
+        and msg.message_thread_id == TOPICO_GIBBY
+    )
+
+    if eh_privado or eh_gibby:
+
+        dados_gibby = extrair_gibby(texto)
+
+        if dados_gibby:
+
+            tg_id = msg.from_user.id
+
+            nome = buscar_nome_por_id(tg_id)
+
+            if not nome:
+
+                await msg.reply_text(
+                    "⚠ Você ainda não possui perfil cadastrado."
+                )
+
+                return
+
+            salvar_gibby(
+                tg_id,
+                nome,
+                dados_gibby["item"],
+                dados_gibby["nivel_origem"],
+                dados_gibby["nivel_destino"],
+                dados_gibby["resultado"],
+                dados_gibby["itens_base"]
+            )
+
+            if dados_gibby["resultado"] == "SUCESSO":
+
+                if dados_gibby["nivel_destino"] == 1:
+
+                    resposta = random.choice(
+                        MSG_GIBBY_SUCESSO_1
+                    )
+
+                elif dados_gibby["nivel_destino"] == 2:
+
+                    resposta = random.choice(
+                        MSG_GIBBY_SUCESSO_2
+                    )
+
+                else:
+
+                    resposta = random.choice(
+                        MSG_GIBBY_SUCESSO_3
+                    )
+
+            else:
+
+                resposta = random.choice(
+                    MSG_GIBBY_FALHA
+                )
+
+            await msg.reply_text(
+                resposta.format(
+                    item=dados_gibby["item"]
+                )
             )
 
             return
