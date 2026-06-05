@@ -447,7 +447,13 @@ def ranking_xpdif():
     return texto
 
 async def cmd_lista(update, context):
-    await update.message.reply_text(gerar_lista())
+
+    if not comando_permitido(update.message):
+        return
+
+    await update.message.reply_text(
+        gerar_lista()
+    )
 
 async def cmd_xp(update, context):
 
@@ -459,7 +465,13 @@ async def cmd_xp(update, context):
     )
 
 async def cmd_xpdif(update, context):
-    await update.message.reply_text(ranking_xpdif())
+
+    if not comando_permitido(update.message):
+        return
+
+    await update.message.reply_text(
+        ranking_xpdif()
+    )
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -565,6 +577,9 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_cacada(update, context):
 
+    if not comando_permitido(update.message):
+        return
+
     tg_id = update.effective_user.id
 
     cur = conn.cursor()
@@ -595,6 +610,9 @@ async def cmd_cacada(update, context):
     await update.message.reply_text(texto)
 
 async def cmd_pvp(update, context):
+
+    if not comando_permitido(update.message):
+        return
 
     cur = conn.cursor()
 
