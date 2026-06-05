@@ -1145,6 +1145,78 @@ async def cmd_gibby(update, context):
 
     await update.message.reply_text(texto)
 
+async def cmd_gibbyazar(update, context):
+
+    if not comando_permitido(update.message):
+        return
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            nome,
+            COUNT(*) AS martelos,
+            SUM(
+                CASE
+                    WHEN resultado='SUCESSO'
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS sucessos
+        FROM gibby_logs
+        GROUP BY nome
+        HAVING COUNT(*) >= 10
+    """)
+
+    rows = cur.fetchall()
+
+    ranking = []
+
+    for nome, martelos, sucessos in rows:
+
+        sucessos = sucessos or 0
+
+        taxa = (
+            sucessos * 100 / martelos
+        )
+
+        ranking.append(
+            (
+                taxa,
+                nome,
+                martelos
+            )
+        )
+
+    ranking.sort(key=lambda x: x[0])
+
+    texto = (
+        "💀 AMALDIÇOADOS PELO GOBLIN GIBBY\n\n"
+    )
+
+    if not ranking:
+
+        texto += (
+            "Ainda não há registros suficientes."
+        )
+
+    else:
+
+        for pos, (taxa, nome, martelos) in enumerate(ranking[:10], 1):
+
+            texto += (
+                f"{pos}. {nome}\n"
+                f"🎯 {taxa:.1f}% de sucesso\n"
+                f"🔨 {martelos} martelos\n\n"
+            )
+
+        texto += (
+            "🍺 O Gibby agradece "
+            "as contribuições para a ciência."
+        )
+
+    await update.message.reply_text(texto)
+
 def main():
     print("1 - Entrou no main")
 
@@ -1164,6 +1236,13 @@ def main():
         CommandHandler(
             "gibby",
             cmd_gibby
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "gibbyazar",
+            cmd_gibbyazar
         )
     )
 
