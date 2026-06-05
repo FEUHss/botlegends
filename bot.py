@@ -219,38 +219,36 @@ def buscar_nome_por_id(tg_id):
 
     return row[0] if row else None
 
-    import random
+MSG_GIBBY_SUCESSO_1 = [
+    "🔨 O Gibby bateu torto, mas bateu certo. {item} alcançou +1.",
+    "🍺 Gibby jurou que sabia o que estava fazendo. E funcionou.",
+    "✨ O martelo cantou, as runas brilharam e {item} virou +1.",
+    "🛠 Depois de muito barulho e pouca técnica, sucesso.",
+    "🔥 Os espíritos da forja aprovaram a tentativa.",
+    "🏹 O Rastreador anota mais uma vitória nos livros da forja."
+]
 
-    MSG_GIBBY_SUCESSO_1 = [
-        "🔨 O Gibby bateu torto, mas bateu certo. {item} alcançou +1.",
-        "🍺 Gibby jurou que sabia o que estava fazendo. E funcionou.",
-        "✨ O martelo cantou, as runas brilharam e {item} virou +1.",
-        "🛠 Depois de muito barulho e pouca técnica, sucesso.",
-        "🔥 Os espíritos da forja aprovaram a tentativa.",
-        "🏹 O Rastreador anota mais uma vitória nos livros da forja."
-    ]
+MSG_GIBBY_SUCESSO_2 = [
+    "⚡ O impossível aconteceu. {item} alcançou +2.",
+    "🍀 Alguém claramente roubou sorte hoje.",
+    "🔨 O velho Gibby tropeçou e acertou o golpe perfeito.",
+    "📜 Mais um registro glorioso para os livros da forja.",
+    "🔥 As chamas aceitaram o sacrifício.",
+    "🏆 O martelo venceu a estatística."
+]
 
-    MSG_GIBBY_SUCESSO_2 = [
-        "⚡ O impossível aconteceu. {item} alcançou +2.",
-        "🍀 Alguém claramente roubou sorte hoje.",
-        "🔨 O velho Gibby tropeçou e acertou o golpe perfeito.",
-        "📜 Mais um registro glorioso para os livros da forja.",
-        "🔥 As chamas aceitaram o sacrifício.",
-        "🏆 O martelo venceu a estatística."
-    ]
+MSG_GIBBY_SUCESSO_3 = [
+    "👑 LENDA! {item} alcançou +3. Os livros da forja registrarão este feito por gerações."
+]
 
-    MSG_GIBBY_SUCESSO_3 = [
-        "👑 LENDA! {item} alcançou +3. Os livros da forja registrarão este feito por gerações."
-    ]
-
-    MSG_GIBBY_FALHA = [
-        "💀 Gibby cobrou o preço. {item} virou pó.",
-        "🪦 Os espíritos da forja rejeitaram a tentativa.",
-        "🔥 O martelo venceu. O item perdeu.",
-        "🍺 Gibby garante que da próxima vez funciona.",
-        "⚰ Mais um item tombou diante da estatística.",
-        "📉 O ouro foi gasto. A tristeza foi gratuita."
-    ]
+MSG_GIBBY_FALHA = [
+    "💀 Gibby cobrou o preço. {item} virou pó.",
+    "🪦 Os espíritos da forja rejeitaram a tentativa.",
+    "🔥 O martelo venceu. O item perdeu.",
+    "🍺 Gibby garante que da próxima vez funciona.",
+    "⚰ Mais um item tombou diante da estatística.",
+    "📉 O ouro foi gasto. A tristeza foi gratuita."
+]
 
 def extrair_cacada(texto):
 
