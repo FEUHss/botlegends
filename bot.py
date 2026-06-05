@@ -10,11 +10,25 @@ TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 GRUPO_ID = -1003792787717
+
 TOPICO_PRESENCA = 16325
 TOPICO_LOOTS = 19
 
+TOPICO_PILAR = 29992
+TOPICO_GIBBY = 82230
+
 conn = psycopg2.connect(DATABASE_URL)
 tz = pytz.timezone("America/Sao_Paulo")
+
+def comando_permitido(msg):
+
+    if msg.chat.type == "private":
+        return True
+
+    return (
+        msg.chat.id == GRUPO_ID
+        and msg.message_thread_id == TOPICO_PILAR
+    )
 
 def hoje():
     return datetime.now(tz).date()
@@ -436,7 +450,13 @@ async def cmd_lista(update, context):
     await update.message.reply_text(gerar_lista())
 
 async def cmd_xp(update, context):
-    await update.message.reply_text(ranking_xp())
+
+    if not comando_permitido(update.message):
+        return
+
+    await update.message.reply_text(
+        ranking_xp()
+    )
 
 async def cmd_xpdif(update, context):
     await update.message.reply_text(ranking_xpdif())
