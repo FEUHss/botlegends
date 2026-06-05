@@ -242,11 +242,11 @@ MSG_GIBBY_SUCESSO_3 = [
 ]
 
 MSG_GIBBY_FALHA = [
-    "💀 Gibby cobrou o preço. {item} virou pó.",
+    "💀 Gibby cobrou o preço. Dois {item} viraram pó.",
     "🪦 Os espíritos da forja rejeitaram a tentativa.",
-    "🔥 O martelo venceu. O item perdeu.",
+    "🔥 O martelo venceu. Os itens perderam.",
     "🍺 Gibby garante que da próxima vez funciona.",
-    "⚰ Mais um item tombou diante da estatística.",
+    "⚰ Mais um par de itens tombou diante da estatística.",
     "📉 O ouro foi gasto. A tristeza foi gratuita."
 ]
 
@@ -361,8 +361,22 @@ def extrair_gibby(texto):
 
     if "FALHA CATASTRÓFICA" in texto:
 
+    match = re.search(
+        r"Ambos os (.+?) \+(\d)",
+        texto
+    )
+
+    if match:
+
+        item = match.group(1).strip()
+
+        nivel_origem = int(match.group(2))
+        nivel_destino = nivel_origem + 1
+
+    else:
+
         match = re.search(
-            r"Ambos os (.+?) \+(\d)",
+            r"Ambos os (.+?) explodiram",
             texto
         )
 
@@ -371,22 +385,22 @@ def extrair_gibby(texto):
 
         item = match.group(1).strip()
 
-        nivel_origem = int(match.group(2))
-        nivel_destino = nivel_origem + 1
+        nivel_origem = 0
+        nivel_destino = 1
 
-        itens_base = {
-            1: 2,
-            2: 4,
-            3: 8
-        }.get(nivel_destino, 0)
+    itens_base = {
+        1: 2,
+        2: 4,
+        3: 8
+    }.get(nivel_destino, 0)
 
-        return {
-            "item": item,
-            "nivel_origem": nivel_origem,
-            "nivel_destino": nivel_destino,
-            "resultado": "FALHA",
-            "itens_base": itens_base
-        }
+    return {
+        "item": item,
+        "nivel_origem": nivel_origem,
+        "nivel_destino": nivel_destino,
+        "resultado": "FALHA",
+        "itens_base": itens_base
+    }
 
     return None
 
