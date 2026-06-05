@@ -329,44 +329,44 @@ def extrair_gibby(texto):
 
     if "SUCESSO!" in texto:
 
-    match = re.search(
-        r"SUCESSO!\s*🔥?\s*\n*\s*(.+?) foi forjado",
-        texto,
-        re.DOTALL
-    )
+        match = re.search(
+            r"SUCESSO!\s*🔥?\s*\n*\s*(.+?) foi forjado",
+            texto,
+            re.DOTALL
+        )
 
-    if not match:
-        return None
+        if not match:
+            return None
 
-    item = match.group(1).strip()
+        item = match.group(1).strip()
 
-    nivel_match = re.search(
-        r"evoluiu para \+(\d)",
-        texto
-    )
+        nivel_match = re.search(
+            r"evoluiu para \+(\d)",
+            texto
+        )
 
-    if not nivel_match:
-        return None
+        if not nivel_match:
+            return None
 
-    nivel_destino = int(
-        nivel_match.group(1)
-    )
+        nivel_destino = int(
+            nivel_match.group(1)
+        )
 
-    nivel_origem = nivel_destino - 1
+        nivel_origem = nivel_destino - 1
 
-    itens_base = {
-        1: 2,
-        2: 4,
-        3: 8
-    }.get(nivel_destino, 0)
+        itens_base = {
+            1: 2,
+            2: 4,
+            3: 8
+        }.get(nivel_destino, 0)
 
-    return {
-        "item": item,
-        "nivel_origem": nivel_origem,
-        "nivel_destino": nivel_destino,
-        "resultado": "SUCESSO",
-        "itens_base": itens_base
-    }
+        return {
+            "item": item,
+            "nivel_origem": nivel_origem,
+            "nivel_destino": nivel_destino,
+            "resultado": "SUCESSO",
+            "itens_base": itens_base
+        }
 
     # ===== FALHA =====
 
