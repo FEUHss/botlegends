@@ -1217,6 +1217,148 @@ async def cmd_gibbyazar(update, context):
 
     await update.message.reply_text(texto)
 
+async def cmd_gibbygeral(update, context):
+
+    if not comando_permitido(update.message):
+        return
+
+    cur = conn.cursor()
+
+    # Ferreiros registrados
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT telegram_id)
+        FROM gibby_logs
+    """)
+
+    ferreiros = cur.fetchone()[0]
+
+    # Martelos utilizados
+
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM gibby_logs
+    """)
+
+    martelos = cur.fetchone()[0]
+
+    # Itens base consumidos
+
+    cur.execute("""
+        SELECT COALESCE(
+            SUM(itens_base_consumidos),
+            0
+        )
+        FROM gibby_logs
+    """)
+
+    itens_base = cur.fetchone()[0]
+
+    # +3 criados
+
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM gibby_logs
+        WHERE resultado='SUCESSO'
+        AND nivel_destino=3
+    """)
+
+    mais3 = cur.fetchone()[0]
+
+    # Contadores
+
+    dados = {}
+
+    for nivel in [1,2,3]:
+
+        cur.execute("""
+            SELECT
+                SUM(
+                    CASE
+                        WHEN resultado='SUCESSO'
+                        THEN 1
+                        ELSE 0
+                    END
+                ),
+                SUM(
+                    CASE
+                        WHEN resultado='FALHA'
+                        THEN 1
+                        ELSE 0
+                    END
+                )
+            FROM gibby_logs
+            WHERE nivel_destino=%s
+        """,(nivel,))
+
+        sucesso, falha = cur.fetchone()
+
+        sucesso = sucesso or 0
+        falha = falha or 0
+
+        dados[nivel] = (
+            sucesso,
+            falha
+        )
+
+    total_sucesso = (
+        dados[1][0]
+        + dados[2][0]
+        + dados[3][0]
+    )
+
+    total_falha = (
+        dados[1][1]
+        + dados[2][1]
+        + dados[3][1]
+    )
+
+    total = total_sucesso + total_falha
+
+    taxa_geral = (
+        total_sucesso * 100 / total
+        if total
+        else 0
+    )
+
+    itens_destruidos = (
+        itens_base
+        - (
+            dados[1][0] * 1
+            + dados[2][0] * 2
+            + dados[3][0] * 4
+        )
+    )
+
+    texto = (
+        f"🔨 GRANDES LIVROS DA FORJA DO GIBBY\n\n"
+        f"📊 Dados gerais da Legends\n\n"
+        f"👥 Ferreiros registrados: {ferreiros}\n\n"
+        f"🔨 Martelos utilizados: {martelos}\n\n"
+        f"📦 Itens base consumidos: {itens_base}\n\n"
+        f"💀 Itens destruídos: {itens_destruidos}\n\n"
+        f"👑 Itens +3 criados: {mais3}\n\n"
+        f"━━━━━━━━━━━━\n\n"
+        f"⭐ +1\n"
+        f"✅ {dados[1][0]}\n"
+        f"❌ {dados[1][1]}\n"
+        f"🎯 {(dados[1][0]*100/(dados[1][0]+dados[1][1])) if (dados[1][0]+dados[1][1]) else 0:.1f}%\n\n"
+        f"⭐⭐ +2\n"
+        f"✅ {dados[2][0]}\n"
+        f"❌ {dados[2][1]}\n"
+        f"🎯 {(dados[2][0]*100/(dados[2][0]+dados[2][1])) if (dados[2][0]+dados[2][1]) else 0:.1f}%\n\n"
+        f"⭐⭐⭐ +3\n"
+        f"✅ {dados[3][0]}\n"
+        f"❌ {dados[3][1]}\n"
+        f"🎯 {(dados[3][0]*100/(dados[3][0]+dados[3][1])) if (dados[3][0]+dados[3][1]) else 0:.1f}%\n\n"
+        f"━━━━━━━━━━━━\n\n"
+        f"🏆 Taxa geral\n"
+        f"🎯 {taxa_geral:.1f}%\n\n"
+        f"📜 Os livros da forja continuam crescendo a cada martelo utilizado."
+    )
+
+    await update.message.reply_text(texto)
+
 def main():
     print("1 - Entrou no main")
 
@@ -1243,6 +1385,13 @@ def main():
         CommandHandler(
             "gibbyazar",
             cmd_gibbyazar
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "gibbygeral",
+            cmd_gibbygeral
         )
     )
 
