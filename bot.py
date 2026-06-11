@@ -24,7 +24,10 @@ tz = pytz.timezone("America/Sao_Paulo")
 def comando_permitido(msg):
 
     if msg.chat.type == "private":
-        return True
+
+        return membro_cadastrado(
+            msg.from_user.id
+        )
 
     return (
         msg.chat.id == GRUPO_ID
@@ -249,6 +252,40 @@ MSG_GIBBY_FALHA = [
     "⚰ Mais um par de itens tombou diante da estatística.",
     "📉 O ouro foi gasto. A tristeza foi gratuita."
 ]
+
+def membro_cadastrado(tg_id):
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT 1
+        FROM membros
+        WHERE telegram_id=%s
+        """,
+        (tg_id,)
+    )
+
+    return cur.fetchone() is not None
+
+async def avisar_tentativa_acesso(
+    context,
+    user,
+    comando
+):
+
+    texto = (
+        "🚨 TENTATIVA DE ACESSO\n\n"
+        f"👤 Nome: {user.full_name}\n"
+        f"📛 Username: @{user.username if user.username else 'sem username'}\n"
+        f"🆔 ID: {user.id}\n"
+        f"⌨ Comando: {comando}"
+    )
+
+    await context.bot.send_message(
+        chat_id=5285053532,
+        text=texto
+    )
 
 def extrair_cacada(texto):
 
@@ -621,6 +658,20 @@ async def cmd_lista(update, context):
 async def cmd_xp(update, context):
 
     if not comando_permitido(update.message):
+
+        if update.message.chat.type == "private":
+
+            await avisar_tentativa_acesso(
+                context,
+                update.effective_user,
+                "/xp"
+            )
+
+            await update.message.reply_text(
+                "⚠ Você não possui um perfil cadastrado.\n\n"
+                "Envie seu perfil no tópico de Presença da guilda e tente novamente."
+            )
+
         return
 
     await update.message.reply_text(
