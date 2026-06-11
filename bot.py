@@ -287,6 +287,32 @@ async def avisar_tentativa_acesso(
         text=texto
     )
 
+async def validar_acesso(
+    update,
+    context,
+    comando
+):
+
+    if comando_permitido(
+        update.message
+    ):
+        return True
+
+    if update.message.chat.type == "private":
+
+        await avisar_tentativa_acesso(
+            context,
+            update.effective_user,
+            comando
+        )
+
+        await update.message.reply_text(
+            "⚠ Você não possui um perfil cadastrado.\n\n"
+            "Envie seu perfil no tópico de Presença da guilda e tente novamente."
+        )
+
+    return False
+
 def extrair_cacada(texto):
 
     if "RESUMO DA CAÇADA EM DUPLA" not in texto:
@@ -648,7 +674,11 @@ def ranking_xpdif():
 
 async def cmd_lista(update, context):
 
-    if not comando_permitido(update.message):
+    if not await validar_acesso(
+        update,
+        context,
+        "/lista"
+    ):
         return
 
     await update.message.reply_text(
@@ -657,21 +687,11 @@ async def cmd_lista(update, context):
 
 async def cmd_xp(update, context):
 
-    if not comando_permitido(update.message):
-
-        if update.message.chat.type == "private":
-
-            await avisar_tentativa_acesso(
-                context,
-                update.effective_user,
-                "/xp"
-            )
-
-            await update.message.reply_text(
-                "⚠ Você não possui um perfil cadastrado.\n\n"
-                "Envie seu perfil no tópico de Presença da guilda e tente novamente."
-            )
-
+    if not await validar_acesso(
+        update,
+        context,
+        "/xp"
+    ):
         return
 
     await update.message.reply_text(
@@ -680,7 +700,11 @@ async def cmd_xp(update, context):
 
 async def cmd_xpdif(update, context):
 
-    if not comando_permitido(update.message):
+    if not await validar_acesso(
+        update,
+        context,
+        "/xpdif"
+    ):
         return
 
     await update.message.reply_text(
@@ -862,7 +886,11 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_cacada(update, context):
 
-    if not comando_permitido(update.message):
+    if not await validar_acesso(
+        update,
+        context,
+        "/cacada"
+    ):
         return
 
     tg_id = update.effective_user.id
@@ -896,7 +924,11 @@ async def cmd_cacada(update, context):
 
 async def cmd_pvp(update, context):
 
-    if not comando_permitido(update.message):
+    if not await validar_acesso(
+        update,
+        context,
+        "/pvp"
+    ):
         return
 
     cur = conn.cursor()
@@ -1029,7 +1061,11 @@ async def mostrar_item_gibby(
 
 async def cmd_gibby(update, context):
 
-    if not comando_permitido(update.message):
+    if not await validar_acesso(
+        update,
+        context,
+        "/gibby"
+    ):
         return
 
     tg_id = update.effective_user.id
@@ -1198,7 +1234,11 @@ async def cmd_gibby(update, context):
 
 async def cmd_gibbyazar(update, context):
 
-    if not comando_permitido(update.message):
+    if not await validar_acesso(
+        update,
+        context,
+        "/gibbyazar"
+    ):
         return
 
     cur = conn.cursor()
@@ -1270,7 +1310,11 @@ async def cmd_gibbyazar(update, context):
 
 async def cmd_gibbygeral(update, context):
 
-    if not comando_permitido(update.message):
+    if not await validar_acesso(
+        update,
+        context,
+        "/gibbygeral"
+    ):
         return
 
     cur = conn.cursor()
@@ -1410,6 +1454,70 @@ async def cmd_gibbygeral(update, context):
 
     await update.message.reply_text(texto)
 
+async def cmd_atk(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/atk"
+    ):
+        return
+
+    await update.message.reply_text(
+        ranking_status(
+            "atk",
+            "ATAQUE"
+        )
+    )
+
+async def cmd_def(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/def"
+    ):
+        return
+
+    await update.message.reply_text(
+        ranking_status(
+            "def",
+            "DEFESA"
+        )
+    )
+
+async def cmd_hp(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/hp"
+    ):
+        return
+
+    await update.message.reply_text(
+        ranking_status(
+            "hp",
+            "HP"
+        )
+    )
+
+async def cmd_crit(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/crit"
+    ):
+        return
+
+    await update.message.reply_text(
+        ranking_status(
+            "crit",
+            "CRÍTICO"
+        )
+    )
+
 def main():
     print("1 - Entrou no main")
 
@@ -1449,36 +1557,28 @@ def main():
     app.add_handler(
         CommandHandler(
             "atk",
-            lambda u, c: u.message.reply_text(
-                ranking_status("atk", "ATAQUE")
-            )
+            cmd_atk
         )
     )
 
     app.add_handler(
         CommandHandler(
             "def",
-            lambda u, c: u.message.reply_text(
-                ranking_status("def", "DEFESA")
-            )
+            cmd_def
         )
     )
 
     app.add_handler(
         CommandHandler(
             "hp",
-            lambda u, c: u.message.reply_text(
-                ranking_status("hp", "HP")
-            )
+            cmd_hp
         )
     )
 
     app.add_handler(
         CommandHandler(
             "crit",
-            lambda u, c: u.message.reply_text(
-                ranking_status("crit", "CRÍTICO")
-            )
+            cmd_crit
         )
     )
 
