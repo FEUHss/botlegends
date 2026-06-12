@@ -1576,6 +1576,83 @@ def teclado_categorias(classe):
 
     ])
 
+def emoji_raridade(raridade):
+
+    mapa = {
+
+        "evento": "⚪",
+        "comum": "🟢",
+        "incomum": "🔵",
+        "raro": "🟣",
+        "lendario": "🟠",
+        "especial": "🟡"
+
+    }
+
+    return mapa.get(
+        raridade,
+        "❓"
+    )
+
+def teclado_itens(
+    classe,
+    categoria
+):
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT
+            id,
+            nome,
+            raridade
+        FROM itens_legends
+        WHERE categoria=%s
+        AND (
+            classe=%s
+            OR classe='todas'
+        )
+        ORDER BY nivel
+        """,
+        (
+            categoria,
+            classe
+        )
+    )
+
+    rows = cur.fetchall()
+
+    teclado = []
+
+    for item_id, nome, raridade in rows:
+
+        emoji = emoji_raridade(
+            raridade
+        )
+
+        teclado.append(
+            [
+                InlineKeyboardButton(
+                    f"{emoji} {nome}",
+                    callback_data=f"item_{item_id}"
+                )
+            ]
+        )
+
+    teclado.append(
+        [
+            InlineKeyboardButton(
+                "⬅ Voltar",
+                callback_data=f"voltar_{classe}"
+            )
+        ]
+    )
+
+    return InlineKeyboardMarkup(
+        teclado
+    )
+
 async def callback_biblioteca(update, context):
 
     query = update.callback_query
@@ -1599,6 +1676,30 @@ async def callback_biblioteca(update, context):
     # GUERREIRO
 
     if dados == "bib_guerreiro":
+
+        await query.edit_message_text(
+            "⚔ BIBLIOTECA GUERREIRO\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_categorias(
+                "guerreiro"
+            )
+        )
+
+        return
+
+    if dados == "cat_guerreiro_arma":
+
+        await query.edit_message_text(
+            "⚔ ARMAS - GUERREIRO",
+            reply_markup=teclado_itens(
+                "guerreiro",
+                "arma"
+            )
+        )
+
+        return
+
+    if dados == "voltar_guerreiro":
 
         await query.edit_message_text(
             "⚔ BIBLIOTECA GUERREIRO\n\n"
