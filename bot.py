@@ -1515,6 +1515,76 @@ async def cmd_item(update, context):
         )
     )
 
+async def callback_biblioteca(update, context):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    dados = query.data
+
+    if dados == "bib_guerreiro":
+
+        teclado = [
+
+            [
+                InlineKeyboardButton(
+                    "⚔ Armas",
+                    callback_data="cat_guerreiro_arma"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "🛡 Escudos",
+                    callback_data="cat_guerreiro_escudo"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "🥋 Peitorais",
+                    callback_data="cat_guerreiro_peitoral"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "👢 Botas",
+                    callback_data="cat_guerreiro_bota"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "💍 Anéis",
+                    callback_data="cat_guerreiro_anel"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "📿 Colares",
+                    callback_data="cat_guerreiro_colar"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "⬅ Voltar",
+                    callback_data="voltar_inicio"
+                )
+            ]
+        ]
+
+        await query.edit_message_text(
+            "⚔ BIBLIOTECA GUERREIRO\n\n"
+            "Escolha uma categoria:",
+            reply_markup=InlineKeyboardMarkup(
+                teclado
+            )
+        )
+
 async def cmd_atk(update, context):
 
     if not await validar_acesso(
@@ -1587,12 +1657,26 @@ def main():
     print("2 - Application criada")
 
     # COMANDOS
-    app.add_handler(CommandHandler("lista", cmd_lista))
-    app.add_handler(CommandHandler("xp", cmd_xp))
-    app.add_handler(CommandHandler("xpdif", cmd_xpdif))
 
-    app.add_handler(CommandHandler("cacada", cmd_cacada))
-    app.add_handler(CommandHandler("pvp", cmd_pvp))
+    app.add_handler(
+        CommandHandler("lista", cmd_lista)
+    )
+
+    app.add_handler(
+        CommandHandler("xp", cmd_xp)
+    )
+
+    app.add_handler(
+        CommandHandler("xpdif", cmd_xpdif)
+    )
+
+    app.add_handler(
+        CommandHandler("cacada", cmd_cacada)
+    )
+
+    app.add_handler(
+        CommandHandler("pvp", cmd_pvp)
+    )
 
     app.add_handler(
         CommandHandler(
@@ -1650,9 +1734,18 @@ def main():
         )
     )
 
+    # CALLBACKS DA BIBLIOTECA
+
+    app.add_handler(
+        CallbackQueryHandler(
+            callback_biblioteca
+        )
+    )
+
     print("3 - Handlers registrados")
 
     # DETECTOR DE PERFIS
+
     app.add_handler(
         MessageHandler(
             filters.TEXT | filters.CaptionRegex(".*"),
