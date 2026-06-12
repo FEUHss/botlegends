@@ -4,13 +4,19 @@ import random
 import psycopg2
 import pytz
 from datetime import datetime
-from telegram import Update
 from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup
 )
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
