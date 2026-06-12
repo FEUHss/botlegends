@@ -1474,7 +1474,15 @@ async def cmd_item(update, context):
     ):
         return
 
-    teclado = [
+    await update.message.reply_text(
+        "📚 BIBLIOTECA LEGENDS\n\n"
+        "Escolha uma categoria:",
+        reply_markup=teclado_inicio_biblioteca()
+    )
+
+def teclado_inicio_biblioteca():
+
+    return InlineKeyboardMarkup([
 
         [
             InlineKeyboardButton(
@@ -1511,15 +1519,62 @@ async def cmd_item(update, context):
             )
         ]
 
-    ]
+    ])
 
-    await update.message.reply_text(
-        "📚 BIBLIOTECA LEGENDS\n\n"
-        "Escolha uma categoria:",
-        reply_markup=InlineKeyboardMarkup(
-            teclado
-        )
-    )
+def teclado_categorias(classe):
+
+    return InlineKeyboardMarkup([
+
+        [
+            InlineKeyboardButton(
+                "⚔ Armas",
+                callback_data=f"cat_{classe}_arma"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🛡 Escudos",
+                callback_data=f"cat_{classe}_escudo"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🥋 Peitorais",
+                callback_data=f"cat_{classe}_peitoral"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "👢 Botas",
+                callback_data=f"cat_{classe}_bota"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "💍 Anéis",
+                callback_data=f"cat_{classe}_anel"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "📿 Colares",
+                callback_data=f"cat_{classe}_colar"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "⬅ Voltar",
+                callback_data="voltar_inicio"
+            )
+        ]
+
+    ])
 
 async def callback_biblioteca(update, context):
 
@@ -1529,67 +1584,97 @@ async def callback_biblioteca(update, context):
 
     dados = query.data
 
+    # VOLTAR
+
+    if dados == "voltar_inicio":
+
+        await query.edit_message_text(
+            "📚 BIBLIOTECA LEGENDS\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_inicio_biblioteca()
+        )
+
+        return
+
+    # GUERREIRO
+
     if dados == "bib_guerreiro":
-
-        teclado = [
-
-            [
-                InlineKeyboardButton(
-                    "⚔ Armas",
-                    callback_data="cat_guerreiro_arma"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "🛡 Escudos",
-                    callback_data="cat_guerreiro_escudo"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "🥋 Peitorais",
-                    callback_data="cat_guerreiro_peitoral"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "👢 Botas",
-                    callback_data="cat_guerreiro_bota"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "💍 Anéis",
-                    callback_data="cat_guerreiro_anel"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "📿 Colares",
-                    callback_data="cat_guerreiro_colar"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "⬅ Voltar",
-                    callback_data="voltar_inicio"
-                )
-            ]
-        ]
 
         await query.edit_message_text(
             "⚔ BIBLIOTECA GUERREIRO\n\n"
             "Escolha uma categoria:",
-            reply_markup=InlineKeyboardMarkup(
-                teclado
+            reply_markup=teclado_categorias(
+                "guerreiro"
             )
         )
+
+        return
+
+    # ARQUEIRO
+
+    if dados == "bib_arqueiro":
+
+        await query.edit_message_text(
+            "🏹 BIBLIOTECA ARQUEIRO\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_categorias(
+                "arqueiro"
+            )
+        )
+
+        return
+
+    # MAGO
+
+    if dados == "bib_mago":
+
+        await query.edit_message_text(
+            "🔮 BIBLIOTECA MAGO\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_categorias(
+                "mago"
+            )
+        )
+
+        return
+
+    # CONSUMÍVEIS
+
+    if dados == "bib_consumiveis":
+
+        await query.edit_message_text(
+            "🧪 CONSUMÍVEIS\n\n"
+            "Em construção.",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅ Voltar",
+                        callback_data="voltar_inicio"
+                    )
+                ]
+            ])
+        )
+
+        return
+
+    # ESPECIAIS
+
+    if dados == "bib_especiais":
+
+        await query.edit_message_text(
+            "✨ ESPECIAIS\n\n"
+            "Em construção.",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅ Voltar",
+                        callback_data="voltar_inicio"
+                    )
+                ]
+            ])
+        )
+
+        return
 
 async def cmd_atk(update, context):
 
