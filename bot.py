@@ -5,6 +5,11 @@ import psycopg2
 import pytz
 from datetime import datetime
 from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("TOKEN")
@@ -1454,6 +1459,62 @@ async def cmd_gibbygeral(update, context):
 
     await update.message.reply_text(texto)
 
+async def cmd_item(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/item"
+    ):
+        return
+
+    teclado = [
+
+        [
+            InlineKeyboardButton(
+                "⚔ Guerreiro",
+                callback_data="bib_guerreiro"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🏹 Arqueiro",
+                callback_data="bib_arqueiro"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🔮 Mago",
+                callback_data="bib_mago"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🧪 Consumíveis",
+                callback_data="bib_consumiveis"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "✨ Especiais",
+                callback_data="bib_especiais"
+            )
+        ]
+
+    ]
+
+    await update.message.reply_text(
+        "📚 BIBLIOTECA LEGENDS\n\n"
+        "Escolha uma categoria:",
+        reply_markup=InlineKeyboardMarkup(
+            teclado
+        )
+    )
+
 async def cmd_atk(update, context):
 
     if not await validar_acesso(
@@ -1551,6 +1612,13 @@ def main():
         CommandHandler(
             "gibbygeral",
             cmd_gibbygeral
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "item",
+            cmd_item
         )
     )
 
