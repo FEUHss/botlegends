@@ -1644,10 +1644,19 @@ def teclado_itens(
         if duas_maos:
             sufixo = " (2M)"
 
-        texto_botao = (
-            f"{emoji} Lv{nivel} "
-            f"{nome}{sufixo}"
-        )
+        if nivel and nivel > 0:
+
+            texto_botao = (
+                f"{emoji} Lv{nivel} "
+                f"{nome}{sufixo}"
+            )
+
+        else:
+
+            texto_botao = (
+                f"{emoji} "
+                f"{nome}{sufixo}"
+            )
 
         teclado.append(
             [
@@ -1912,6 +1921,16 @@ async def callback_biblioteca(update, context):
             "📚 BIBLIOTECA LEGENDS\n\n"
             "Escolha uma categoria:",
             reply_markup=teclado_inicio_biblioteca()
+        )
+
+        return
+
+    if dados == "voltar_todas":
+
+        await query.edit_message_text(
+            "📚 BIBLIOTECA LEGENDS\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_principal()
         )
 
         return
