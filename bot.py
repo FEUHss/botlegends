@@ -1474,6 +1474,30 @@ async def cmd_item(update, context):
     ):
         return
 
+    if update.effective_chat.type != "private":
+
+            bot_username = (
+                await context.bot.get_me()
+            ).username
+
+            teclado = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "📚 Abrir Biblioteca",
+                        url=f"https://t.me/{bot_username}?start=biblioteca"
+                    )
+                ]
+            ])
+
+            await update.message.reply_text(
+                "📚 Para evitar spam nos tópicos da guilda, "
+                "a Biblioteca Legends funciona apenas no privado.\n\n"
+                "Clique no botão abaixo para abrir a biblioteca.",
+                reply_markup=teclado
+            )
+
+            return
+
     await update.message.reply_text(
         "📚 BIBLIOTECA LEGENDS\n\n"
         "Escolha uma categoria:",
