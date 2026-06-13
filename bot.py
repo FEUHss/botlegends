@@ -1930,7 +1930,7 @@ async def callback_biblioteca(update, context):
         await query.edit_message_text(
             "📚 BIBLIOTECA LEGENDS\n\n"
             "Escolha uma categoria:",
-            reply_markup=teclado_principal()
+            reply_markup=teclado_inicio_biblioteca()
         )
 
         return
