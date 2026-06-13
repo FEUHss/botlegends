@@ -1788,6 +1788,12 @@ async def mostrar_item(
 
             drops.append(valor)
 
+    if item.get("mapa"):
+
+        texto += (
+            f"\n🗺️ {item['mapa']}\n"
+        )
+
     if drops:
 
         texto += "\n📍 Obtenção\n"
