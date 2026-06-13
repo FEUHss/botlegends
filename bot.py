@@ -1606,14 +1606,16 @@ def teclado_itens(
         SELECT
             id,
             nome,
-            raridade
+            raridade,
+            nivel,
+            duas_maos
         FROM itens_legends
         WHERE categoria=%s
         AND (
             classe=%s
             OR classe='todas'
         )
-        ORDER BY nivel
+        ORDER BY nivel, nome
         """,
         (
             categoria,
@@ -1625,16 +1627,27 @@ def teclado_itens(
 
     teclado = []
 
-    for item_id, nome, raridade in rows:
+    for (
+        item_id,
+        nome,
+        raridade,
+        nivel,
+        duas_maos
+    ) in rows:
 
         emoji = emoji_raridade(
             raridade
         )
 
+        sufixo = ""
+
+        if duas_maos:
+            sufixo = " (2M)"
+
         teclado.append(
             [
                 InlineKeyboardButton(
-                    f"{emoji} {nome}",
+                    f"{emoji} Lv{nivel} {nome}{sufixo}",
                     callback_data=f"item_{item_id}"
                 )
             ]
@@ -1699,6 +1712,70 @@ async def callback_biblioteca(update, context):
 
         return
 
+    if dados == "cat_guerreiro_escudo":
+
+        await query.edit_message_text(
+            "🛡 ESCUDOS - GUERREIRO",
+            reply_markup=teclado_itens(
+                "guerreiro",
+                "escudo"
+            )
+        )
+
+        return
+
+
+    if dados == "cat_guerreiro_peitoral":
+
+        await query.edit_message_text(
+            "🥋 PEITORAIS - GUERREIRO",
+            reply_markup=teclado_itens(
+                "guerreiro",
+                "peitoral"
+            )
+        )
+
+        return
+
+
+    if dados == "cat_guerreiro_bota":
+
+        await query.edit_message_text(
+            "👢 BOTAS - GUERREIRO",
+           reply_markup=teclado_itens(
+                "guerreiro",
+                "bota"
+            )
+        )
+
+        return
+
+
+    if dados == "cat_guerreiro_anel":
+
+        await query.edit_message_text(
+            "💍 ANÉIS - GUERREIRO",
+            reply_markup=teclado_itens(
+                "guerreiro",
+                "anel"
+            )
+        )
+
+        return
+
+
+    if dados == "cat_guerreiro_colar":
+
+        await query.edit_message_text(
+            "📿 COLARES - GUERREIRO",
+            reply_markup=teclado_itens(
+                "guerreiro",
+                "colar"
+            )
+        )
+
+        return
+
     if dados == "voltar_guerreiro":
 
         await query.edit_message_text(
@@ -1725,6 +1802,90 @@ async def callback_biblioteca(update, context):
 
         return
 
+    if dados == "cat_arqueiro_arma":
+
+        await query.edit_message_text(
+            "⚔ ARMAS - ARQUEIRO",
+            reply_markup=teclado_itens(
+                "arqueiro",
+                "arma"
+            )
+        )
+
+        return
+
+    if dados == "cat_arqueiro_escudo":
+
+        await query.edit_message_text(
+            "🛡 ESCUDOS - ARQUEIRO",
+            reply_markup=teclado_itens(
+                "arqueiro",
+                "escudo"
+            )
+        )
+
+        return
+
+    if dados == "cat_arqueiro_peitoral":
+
+        await query.edit_message_text(
+            "🥋 PEITORAIS - ARQUEIRO",
+            reply_markup=teclado_itens(
+                "arqueiro",
+                "peitoral"
+            )
+        )
+
+        return
+
+    if dados == "cat_arqueiro_bota":
+
+        await query.edit_message_text(
+            "👢 BOTAS - ARQUEIRO",
+            reply_markup=teclado_itens(
+                "arqueiro",
+                "bota"
+            )
+        )
+
+        return
+
+    if dados == "cat_arqueiro_anel":
+
+        await query.edit_message_text(
+            "💍 ANÉIS - ARQUEIRO",
+            reply_markup=teclado_itens(
+                "arqueiro",
+                "anel"
+            )
+        )
+
+        return
+
+    if dados == "cat_arqueiro_colar":
+
+        await query.edit_message_text(
+            "📿 COLARES - ARQUEIRO",
+            reply_markup=teclado_itens(
+                "arqueiro",
+                "colar"
+            )
+        )
+
+        return
+
+    if dados == "voltar_arqueiro":
+
+        await query.edit_message_text(
+            "🏹 BIBLIOTECA ARQUEIRO\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_categorias(
+                "arqueiro"
+            )
+        )
+
+        return
+
     # MAGO
 
     if dados == "bib_mago":
@@ -1739,21 +1900,101 @@ async def callback_biblioteca(update, context):
 
         return
 
+    if dados == "voltar_mago":
+
+        await query.edit_message_text(
+            "🔮 BIBLIOTECA MAGO\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_categorias(
+                "mago"
+            )
+        )
+
+        return
+
+    if dados == "cat_mago_arma":
+
+        await query.edit_message_text(
+            "⚔ ARMAS - MAGO",
+            reply_markup=teclado_itens(
+                "mago",
+                "arma"
+            )
+        )
+
+        return
+
+    if dados == "cat_mago_escudo":
+
+        await query.edit_message_text(
+            "🛡 ESCUDOS - MAGO",
+            reply_markup=teclado_itens(
+                "mago",
+                "escudo"
+            )
+        )
+
+        return
+
+    if dados == "cat_mago_peitoral":
+
+        await query.edit_message_text(
+            "🥋 PEITORAIS - MAGO",
+            reply_markup=teclado_itens(
+                "mago",
+                "peitoral"
+            )
+        )
+
+        return
+
+
+    if dados == "cat_mago_bota":
+
+        await query.edit_message_text(
+            "👢 BOTAS - MAGO",
+            reply_markup=teclado_itens(
+                "mago",
+                "bota"
+            )
+        )
+
+        return
+
+    if dados == "cat_mago_anel":
+
+        await query.edit_message_text(
+            "💍 ANÉIS - MAGO",
+            reply_markup=teclado_itens(
+                "mago",
+                "anel"
+            )
+        )
+
+        return
+
+    if dados == "cat_mago_colar":
+
+        await query.edit_message_text(
+            "📿 COLARES - MAGO",
+            reply_markup=teclado_itens(
+                "mago",
+                "colar"
+            )
+        )
+
+        return
+
     # CONSUMÍVEIS
 
     if dados == "bib_consumiveis":
 
         await query.edit_message_text(
-            "🧪 CONSUMÍVEIS\n\n"
-            "Em construção.",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "⬅ Voltar",
-                        callback_data="voltar_inicio"
-                    )
-                ]
-            ])
+            "🧪 CONSUMÍVEIS",
+            reply_markup=teclado_itens(
+                "todas",
+                "consumivel"
+            )
         )
 
         return
@@ -1763,16 +2004,11 @@ async def callback_biblioteca(update, context):
     if dados == "bib_especiais":
 
         await query.edit_message_text(
-            "✨ ESPECIAIS\n\n"
-            "Em construção.",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "⬅ Voltar",
-                        callback_data="voltar_inicio"
-                    )
-                ]
-            ])
+            "✨ ESPECIAIS",
+            reply_markup=teclado_itens(
+                "todas",
+                "especial"
+            )
         )
 
         return
