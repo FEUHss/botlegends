@@ -1465,6 +1465,22 @@ async def cmd_gibbygeral(update, context):
 
     await update.message.reply_text(texto)
 
+async def cmd_start(update, context):
+
+    if context.args and context.args[0] == "item":
+
+        await update.message.reply_text(
+            "📚 BIBLIOTECA LEGENDS\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_inicio_biblioteca()
+        )
+
+        return
+
+    await update.message.reply_text(
+        "Olá! Use os comandos disponíveis."
+    )
+
 async def cmd_item(update, context):
 
     if not await validar_acesso(
@@ -1484,7 +1500,7 @@ async def cmd_item(update, context):
                 [
                     InlineKeyboardButton(
                         "📚 Abrir Biblioteca",
-                        url=f"https://t.me/{bot_username}?start=biblioteca"
+                        url=f"https://t.me/{bot_username}?start=item"
                     )
                 ]
             ])
@@ -2397,6 +2413,13 @@ def main():
         CommandHandler(
             "gibbygeral",
             cmd_gibbygeral
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "start",
+            cmd_start
         )
     )
 
