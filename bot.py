@@ -1666,6 +1666,174 @@ def teclado_itens(
         teclado
     )
 
+async def mostrar_item(
+    query,
+    item_id
+):
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM itens_legends
+        WHERE id=%s
+    """,(item_id,))
+
+    row = cur.fetchone()
+
+    if not row:
+
+        await query.answer(
+            "Item não encontrado."
+        )
+
+        return
+
+    colunas = [
+        desc[0]
+        for desc in cur.description
+    ]
+
+    item = dict(
+        zip(
+            colunas,
+            row
+        )
+    )
+
+    emoji = emoji_raridade(
+        item["raridade"]
+    )
+
+    texto = (
+        f"{emoji} {item['nome'].upper()}\n\n"
+    )
+
+    classe_map = {
+
+        "guerreiro": "🛡 Guerreiro",
+        "arqueiro": "🏹 Arqueiro",
+        "mago": "🔮 Mago",
+        "todas": "🌎 Todas as Classes"
+
+    }
+
+    texto += (
+        f"{classe_map.get(item['classe'],'')}\n"
+    )
+
+    if item.get("nivel"):
+
+        texto += (
+            f"⭐ Lv {item['nivel']}\n"
+        )
+
+    if item.get("duas_maos"):
+
+        texto += (
+            "⚔ Arma de Duas Mãos\n"
+        )
+
+    stats = ""
+
+    if item.get("atk_min"):
+
+        stats += (
+            f"⚔ {item['atk_min']}~"
+            f"{item['atk_max']}\n"
+        )
+
+    if item.get("def_min"):
+
+        stats += (
+            f"🛡 {item['def_min']}~"
+            f"{item['def_max']}\n"
+        )
+
+    if item.get("hp_min"):
+
+        stats += (
+            f"❤️ {item['hp_min']}~"
+            f"{item['hp_max']}\n"
+        )
+
+    if item.get("crit_min"):
+
+        stats += (
+            f"🎯 {item['crit_min']}~"
+            f"{item['crit_max']}%\n"
+        )
+
+    if stats:
+
+        texto += "\n" + stats
+
+    if item.get("descricao"):
+
+        texto += (
+            f"\n📖 {item['descricao']}\n"
+        )
+
+    drops = []
+
+    for campo in [
+        "drop_1",
+        "drop_2",
+        "drop_3"
+    ]:
+
+        valor = item.get(campo)
+
+        if valor:
+
+            drops.append(valor)
+
+    if drops:
+
+        texto += "\n📍 Obtenção\n"
+
+        for drop in drops:
+
+            texto += (
+                f"• {drop}\n"
+            )
+
+    if item.get("obtencao"):
+
+        texto += (
+            f"\n📍 {item['obtencao']}\n"
+        )
+
+    if item.get("chance_drop"):
+
+        texto += (
+            f"\n🎁 Chance: "
+            f"{item['chance_drop']}"
+        )
+
+    if item.get("passiva"):
+
+        texto += (
+            f"\n\n✨ Passiva\n"
+            f"{item['passiva']}"
+        )
+
+    teclado = InlineKeyboardMarkup([
+
+        [
+            InlineKeyboardButton(
+                "⬅ Voltar",
+                callback_data="voltar_lista"
+            )
+        ]
+
+    ])
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=teclado
+    )
+
 async def callback_biblioteca(update, context):
 
     query = update.callback_query
@@ -1673,6 +1841,21 @@ async def callback_biblioteca(update, context):
     await query.answer()
 
     dados = query.data
+
+    if dados.startswith(
+        "item_"
+    ):
+
+        item_id = int(
+            dados.split("_")[1]
+        )
+
+        await mostrar_item(
+            query,
+            item_id
+        )
+
+        return
 
     # VOLTAR
 
