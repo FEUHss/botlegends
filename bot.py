@@ -1644,6 +1644,11 @@ def teclado_itens(
         if duas_maos:
             sufixo = " (2M)"
 
+        texto_botao = (
+            f"{emoji} Lv{nivel} "
+            f"{nome}{sufixo}"
+        )
+
         teclado.append(
             [
                 InlineKeyboardButton(
