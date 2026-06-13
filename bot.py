@@ -1647,8 +1647,9 @@ def teclado_itens(
         teclado.append(
             [
                 InlineKeyboardButton(
-                    f"{emoji} Lv{nivel} {nome}{sufixo}",
-                    callback_data=f"item_{item_id}"
+                    texto_botao,
+                    callback_data=
+                    f"item_{item_id}_{classe}_{categoria}"
                 )
             ]
         )
@@ -1668,7 +1669,9 @@ def teclado_itens(
 
 async def mostrar_item(
     query,
-    item_id
+    item_id,
+    classe,
+    categoria
 ):
 
     cur = conn.cursor()
@@ -1829,7 +1832,8 @@ async def mostrar_item(
         [
             InlineKeyboardButton(
                 "⬅ Voltar",
-                callback_data="voltar_lista"
+                callback_data=
+                f"lista_{classe}_{categoria}"
             )
         ]
 
@@ -1852,13 +1856,45 @@ async def callback_biblioteca(update, context):
         "item_"
     ):
 
+        partes = dados.split("_")
+
         item_id = int(
-            dados.split("_")[1]
+            partes[1]
         )
+
+        classe = partes[2]
+
+        categoria = partes[3]
 
         await mostrar_item(
             query,
-            item_id
+            item_id,
+            classe,
+            categoria
+        )
+
+        return
+    if dados.startswith(
+        "lista_"
+    ):
+
+        partes = dados.split("_")
+
+        classe = partes[1]
+
+        categoria = partes[2]
+
+        titulo = (
+            f"{categoria.upper()} - "
+            f"{classe.upper()}"
+        )
+
+        await query.edit_message_text(
+            titulo,
+            reply_markup=teclado_itens(
+                classe,
+                categoria
+            )
         )
 
         return
