@@ -1777,8 +1777,8 @@ async def mostrar_item(
     if item.get("crit_min"):
 
         stats += (
-            f"🎯 {item['crit_min']}~"
-            f"{item['crit_max']}%\n"
+            f"🎯 {item['crit_min']:g}~"
+            f"{item['crit_max']:g}%\n"
         )
 
     if stats:
