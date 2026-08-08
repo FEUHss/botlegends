@@ -957,16 +957,47 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg.message_thread_id != TOPICO_PRESENCA:
         return
 
-    nome = extrair_nome(texto)
-
-    if not nome:
+    # Só perfis autênticos encaminhados pelo bot do jogo podem gravar dados.
+    # Mensagens comuns, textos copiados e imagens sem o formato completo são ignorados.
+    if not msg.photo or not msg.caption:
         return
 
-    tg_id = msg.from_user.id
+    if getattr(msg, "forward_origin", None) is None:
+        return
+
+    marcadores_obrigatorios = (
+        r"^Classe\s*:",
+        r"\bLv\s*\d+",
+        r"\bXP\s*:\s*[\d.,]+",
+        r"\bATK\s*:?\s*\d+",
+        r"\bDEF\s*:?\s*\d+",
+        r"\bCRIT\s*:?\s*\d+",
+        r"\bHP\s*:?\s*\d+",
+        r"\bGold\s*:\s*[\d.,]+",
+        r"\bTofus\s*:\s*[\d.,]+",
+    )
+
+    if not all(
+        re.search(marcador, texto, re.IGNORECASE | re.MULTILINE)
+        for marcador in marcadores_obrigatorios
+    ):
+        return
+
+    nome = extrair_nome(texto)
     xp = extrair_xp(texto)
     nivel = extrair_nivel(texto)
     status = extrair_status(texto)
 
+    campos_status = {"atk", "def", "crit", "hp", "gold", "tofus"}
+    if (
+        not nome
+        or xp is None
+        or nivel is None
+        or not campos_status.issubset(status)
+    ):
+        return
+
+    tg_id = msg.from_user.id
     registrar_membro(tg_id, nome)
 
     novo = salvar_presenca(
