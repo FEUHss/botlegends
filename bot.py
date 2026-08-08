@@ -136,40 +136,6 @@ def inicializar_banco():
         cur.close()
 
 inicializar_banco()
-
-def limpar_cadastros_invalidos():
-    nomes_invalidos = ("BOT ON?", "PAI TA ON")
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "SELECT telegram_id FROM membros WHERE nome = ANY(%s)",
-            (list(nomes_invalidos),)
-        )
-        ids = [row[0] for row in cur.fetchall()]
-
-        if not ids:
-            print("5 - Limpeza concluida: nenhum cadastro invalido encontrado")
-            return
-
-        for tabela in ("presencas", "xp_logs", "status", "cacadas", "gibby_logs"):
-            cur.execute(
-                f"DELETE FROM {tabela} WHERE telegram_id = ANY(%s)",
-                (ids,)
-            )
-
-        cur.execute(
-            "DELETE FROM membros WHERE telegram_id = ANY(%s)",
-            (ids,)
-        )
-        conn.commit()
-        print(f"5 - Limpeza concluida: {len(ids)} cadastros removidos")
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-
-limpar_cadastros_invalidos()
 tz = pytz.timezone("America/Sao_Paulo")
 
 def comando_permitido(msg):
