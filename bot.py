@@ -962,7 +962,15 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg.photo or not msg.caption:
         return
 
-    if getattr(msg, "forward_origin", None) is None:
+    eh_encaminhada = any((
+        getattr(msg, "forward_origin", None),
+        getattr(msg, "forward_date", None),
+        getattr(msg, "forward_from", None),
+        getattr(msg, "forward_from_chat", None),
+        getattr(msg, "forward_sender_name", None),
+    ))
+
+    if not eh_encaminhada:
         return
 
     marcadores_obrigatorios = (
