@@ -155,114 +155,100 @@ def hoje():
     return datetime.now(tz).date()
 
 def limpar_nome(nome):
-    return nome.replace("[LG]", "").strip().upper()
+    nome = nome.replace("[LG]", "").strip()
+    nome = re.sub(r"^[^\wÀ-ÿ]+", "", nome).strip()
+    return nome.upper() or None
 
 def extrair_nome(texto):
-    for linha in texto.split("\n"):
-        partes = linha.strip().split()
-        for i, p in enumerate(partes):
-            if p.isdigit():
-                return limpar_nome(" ".join(partes[i+1:]))
+    linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
+
+    # No formato atual, o nick fica imediatamente antes de "Classe:".
+    for i, linha in enumerate(linhas):
+        if re.match(r"^Classe\s*:", linha, re.IGNORECASE) and i > 0:
+            return limpar_nome(linhas[i - 1])
+
+    # Compatibilidade com perfis sem a linha de classe.
+    ignorar = (
+        "classe:", "títulos:", "titulos:", "lv ", "xp:", "faltam:",
+        "arena", "ranking:", "histórico:", "historico:", "energia:",
+        "gold:", "tofus:", "mapa:", "renomear:", "mudar classe:"
+    )
+    for linha in linhas:
+        candidato = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+        if candidato and not candidato.casefold().startswith(ignorar):
+            if not re.search(r"\b(?:ATK|DEF|CRIT|HP)\b", candidato, re.IGNORECASE):
+                return limpar_nome(candidato)
+
     return None
 
 def extrair_xp(texto):
-    for linha in texto.split("\n"):
-        if "XP" in linha:
-            nums = re.findall(r"\d+", linha.replace(".","").replace(",",""))
-            if len(nums) >= 2:
-                return int(nums[1])
-    return None
+    match = re.search(r"\bXP\s*:\s*([\d.,]+)", texto, re.IGNORECASE)
+    if not match:
+        return None
+    return int(re.sub(r"\D", "", match.group(1)))
 
 def extrair_nivel(texto):
-    for linha in texto.split("\n"):
-        if "Lv" in linha:
-            nums = re.findall(r"\d+", linha)
-            if nums:
-                return int(nums[0])
-    return None
+    match = re.search(r"\bLv\s*(\d+)", texto, re.IGNORECASE)
+    return int(match.group(1)) if match else None
 
 def extrair_status(texto):
     dados = {}
-
     bonus_atk = 0
     bonus_def = 0
     bonus_crit = 0
-
     atk = None
     defesa = None
     crit = None
 
-    for linha in texto.split("\n"):
+    for linha in texto.splitlines():
         linha = linha.strip()
 
-        # STATUS PRINCIPAIS
-        if "ATK" in linha and "DEF" in linha and "CRIT" in linha and "+" not in linha:
-
-            atk_match = re.search(r"ATK\s+(\d+\.?\d*)", linha)
-            def_match = re.search(r"DEF\s+(\d+\.?\d*)", linha)
-            crit_match = re.search(r"CRIT\s+(\d+\.?\d*)", linha)
-
-            if atk_match:
-                atk = float(atk_match.group(1))
-
-            if def_match:
-                defesa = float(def_match.group(1))
-
-            if crit_match:
-                crit = float(crit_match.group(1))
-
-        # POÇÕES
-        elif "+" in linha and "ATK" in linha and "DEF" in linha and "CRIT" in linha:
-
-            atk_match = re.search(r"\+(\d+\.?\d*)\s*ATK", linha)
-            def_match = re.search(r"\+(\d+\.?\d*)\s*DEF", linha)
-            crit_match = re.search(r"\+(\d+\.?\d*)\s*%?\s*CRIT", linha)
+        # Status principais e HP podem estar todos na mesma linha.
+        if "+" not in linha:
+            atk_match = re.search(r"\bATK\s*:?\s*(\d+(?:[.,]\d+)?)", linha, re.IGNORECASE)
+            def_match = re.search(r"\bDEF\s*:?\s*(\d+(?:[.,]\d+)?)", linha, re.IGNORECASE)
+            crit_match = re.search(r"\bCRIT\s*:?\s*(\d+(?:[.,]\d+)?)", linha, re.IGNORECASE)
 
             if atk_match:
-                bonus_atk = float(atk_match.group(1))
-
+                atk = float(atk_match.group(1).replace(",", "."))
             if def_match:
-                bonus_def = float(def_match.group(1))
-
+                defesa = float(def_match.group(1).replace(",", "."))
             if crit_match:
-                bonus_crit = float(crit_match.group(1))
+                crit = float(crit_match.group(1).replace(",", "."))
 
-        # ===== HP =====
-        elif "HP" in linha:
+        if "+" in linha:
+            atk_match = re.search(r"\+(\d+(?:[.,]\d+)?)\s*ATK", linha, re.IGNORECASE)
+            def_match = re.search(r"\+(\d+(?:[.,]\d+)?)\s*DEF", linha, re.IGNORECASE)
+            crit_match = re.search(r"\+(\d+(?:[.,]\d+)?)\s*%?\s*CRIT", linha, re.IGNORECASE)
 
-            hp_match = re.search(r"(\d+)\s*/\s*(\d+)", linha)
+            if atk_match:
+                bonus_atk = float(atk_match.group(1).replace(",", "."))
+            if def_match:
+                bonus_def = float(def_match.group(1).replace(",", "."))
+            if crit_match:
+                bonus_crit = float(crit_match.group(1).replace(",", "."))
 
-            if hp_match:
-                dados["hp"] = int(hp_match.group(2))
-            else:
-                numeros = re.findall(r"\d+", linha)
-                if numeros:
-                    dados["hp"] = int(numeros[-1])
+        hp_match = re.search(
+            r"\bHP\s*:?\s*(\d[\d.,]*)(?:\s*/\s*(\d[\d.,]*))?",
+            linha,
+            re.IGNORECASE
+        )
+        if hp_match:
+            valor_hp = hp_match.group(2) or hp_match.group(1)
+            dados["hp"] = int(re.sub(r"\D", "", valor_hp))
 
-        # ===== GOLD =====
-        elif "Gold:" in linha:
+        gold_match = re.search(r"\bGold\s*:\s*([\d.,]+)", linha, re.IGNORECASE)
+        if gold_match:
+            dados["gold"] = int(re.sub(r"\D", "", gold_match.group(1)))
 
-            numeros = re.findall(r"\d+", linha)
-
-            if numeros:
-                dados["gold"] = int(numeros[0])
-
-        # ===== TOFUS =====
-        elif "Tofus:" in linha:
-
-            numeros = re.findall(r"\d+", linha)
-
-            if numeros:
-                dados["tofus"] = int(numeros[0])
-
-    # ===== APLICA DESCONTO DAS POÇÕES =====
+        tofus_match = re.search(r"\bTofus\s*:\s*([\d.,]+)", linha, re.IGNORECASE)
+        if tofus_match:
+            dados["tofus"] = int(re.sub(r"\D", "", tofus_match.group(1)))
 
     if atk is not None:
         dados["atk"] = max(0, atk - bonus_atk)
-
     if defesa is not None:
         dados["def"] = max(0, defesa - bonus_def)
-
     if crit is not None:
         dados["crit"] = max(0, crit - bonus_crit)
 
@@ -276,6 +262,15 @@ def registrar_membro(tg_id, nome):
         ON CONFLICT (telegram_id)
         DO UPDATE SET nome=EXCLUDED.nome
     """,(tg_id,nome))
+
+    # O ID do Telegram é a identidade estável. Corrige o nick também nos
+    # registros já existentes para rankings, presença, caçadas e Gibby.
+    for tabela in ("presencas", "xp_logs", "status", "cacadas", "gibby_logs"):
+        cur.execute(
+            f"UPDATE {tabela} SET nome=%s WHERE telegram_id=%s AND nome<>%s",
+            (nome, tg_id, nome)
+        )
+
     conn.commit()
 
 def salvar_presenca(tg_id,nome):
