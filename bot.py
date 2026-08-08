@@ -30,6 +30,112 @@ TOPICO_PILAR = 29992
 TOPICO_GIBBY = 82230
 
 conn = psycopg2.connect(DATABASE_URL)
+
+def inicializar_banco():
+    tabelas = [
+        """
+        CREATE TABLE IF NOT EXISTS membros (
+            telegram_id BIGINT PRIMARY KEY,
+            nome TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS presencas (
+            id BIGSERIAL PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            nome TEXT NOT NULL,
+            data DATE NOT NULL,
+            UNIQUE (telegram_id, data)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS xp_logs (
+            id BIGSERIAL PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            nome TEXT NOT NULL,
+            xp BIGINT,
+            nivel INTEGER,
+            data_hora TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS status (
+            id BIGSERIAL PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            nome TEXT NOT NULL,
+            atk NUMERIC,
+            def NUMERIC,
+            crit NUMERIC,
+            hp BIGINT,
+            gold BIGINT,
+            tofus BIGINT,
+            data_hora TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS cacadas (
+            id BIGSERIAL PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            nome TEXT NOT NULL,
+            xp BIGINT DEFAULT 0,
+            gold BIGINT DEFAULT 0,
+            lendarios INTEGER DEFAULT 0,
+            pvps INTEGER DEFAULT 0,
+            data_hora TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS gibby_logs (
+            id BIGSERIAL PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            nome TEXT NOT NULL,
+            item TEXT NOT NULL,
+            nivel_origem INTEGER,
+            nivel_destino INTEGER,
+            resultado TEXT,
+            itens_base_consumidos INTEGER DEFAULT 0,
+            data_hora TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS itens_legends (
+            id BIGSERIAL PRIMARY KEY,
+            nome TEXT UNIQUE NOT NULL,
+            classe TEXT NOT NULL,
+            categoria TEXT NOT NULL,
+            raridade TEXT NOT NULL,
+            duas_maos BOOLEAN DEFAULT FALSE,
+            nivel INTEGER,
+            atk_min NUMERIC,
+            atk_max NUMERIC,
+            def_min NUMERIC,
+            def_max NUMERIC,
+            hp_min NUMERIC,
+            hp_max NUMERIC,
+            crit_min NUMERIC,
+            crit_max NUMERIC,
+            descricao TEXT,
+            drop_1 TEXT,
+            drop_2 TEXT,
+            drop_3 TEXT,
+            mapa TEXT,
+            obtencao TEXT,
+            chance_drop TEXT,
+            passiva TEXT
+        )
+        """
+    ]
+
+    cur = conn.cursor()
+    try:
+        for ddl in tabelas:
+            cur.execute(ddl)
+        conn.commit()
+        print("0 - Estrutura do banco verificada")
+    finally:
+        cur.close()
+
+inicializar_banco()
 tz = pytz.timezone("America/Sao_Paulo")
 
 def comando_permitido(msg):
