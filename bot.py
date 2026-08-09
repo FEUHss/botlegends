@@ -263,23 +263,6 @@ def registrar_membro(tg_id, nome):
         DO UPDATE SET nome=EXCLUDED.nome
     """,(tg_id,nome))
 
-    # Mantém a tabela histórica do Railway sincronizada. Ela não possui
-    # restrição única no telegram_id, então atualizamos primeiro e inserimos
-    # somente quando o usuário ainda não existe.
-    cur.execute(
-        "UPDATE players SET nickname=%s WHERE telegram_id=%s",
-        (nome, tg_id)
-    )
-    if cur.rowcount == 0:
-        cur.execute("""
-            INSERT INTO players (telegram_id, player_id, nickname)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (nickname)
-            DO UPDATE SET
-                telegram_id=EXCLUDED.telegram_id,
-                player_id=EXCLUDED.player_id
-        """, (tg_id, "Teletofus", nome))
-
     # O ID do Telegram é a identidade estável. Corrige o nick também nos
     # registros já existentes para rankings, presença, caçadas e Gibby.
     for tabela in ("presencas", "xp_logs", "status", "cacadas", "gibby_logs"):
@@ -325,12 +308,6 @@ def salvar_xp(tg_id,nome,xp,nivel):
         (tg_id,nome,xp,nivel)
     )
 
-    cur.execute("""
-        UPDATE players
-        SET current_xp=%s, level=%s
-        WHERE telegram_id=%s
-    """, (xp, nivel, tg_id))
-
     conn.commit()
 
 def salvar_status(tg_id,nome,d):
@@ -342,15 +319,6 @@ def salvar_status(tg_id,nome,d):
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """,(tg_id,nome,d.get("atk"),d.get("def"),d.get("crit"),
          d.get("hp"),d.get("gold"),d.get("tofus")))
-
-    cur.execute("""
-        UPDATE players
-        SET atk=COALESCE(%s, atk),
-            defense=COALESCE(%s, defense),
-            crit=COALESCE(%s, crit),
-            hp=COALESCE(%s, hp)
-        WHERE telegram_id=%s
-    """, (d.get("atk"), d.get("def"), d.get("crit"), d.get("hp"), tg_id))
 
     conn.commit()
 
