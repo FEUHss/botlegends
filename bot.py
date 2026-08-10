@@ -143,6 +143,42 @@ def inicializar_banco():
             chance_drop TEXT,
             passiva TEXT
         )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS catalogo_mapas (
+            id BIGSERIAL PRIMARY KEY,
+            ordem INTEGER NOT NULL,
+            nome TEXT UNIQUE NOT NULL,
+            nivel_minimo INTEGER,
+            dificuldade INTEGER,
+            tempo_masmorra INTEGER,
+            xp_masmorra_4 BIGINT,
+            xp_masmorra_5 BIGINT,
+            descricao TEXT,
+            fonte TEXT NOT NULL,
+            confirmado BOOLEAN DEFAULT FALSE,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS catalogo_monstros (
+            id BIGSERIAL PRIMARY KEY,
+            ordem INTEGER NOT NULL,
+            nome TEXT NOT NULL,
+            mapa_id BIGINT REFERENCES catalogo_mapas(id),
+            tipo TEXT DEFAULT 'Monstro',
+            raridade TEXT,
+            hp BIGINT,
+            atk NUMERIC,
+            defesa NUMERIC,
+            xp BIGINT,
+            gold BIGINT,
+            drops TEXT,
+            fonte TEXT NOT NULL,
+            confirmado BOOLEAN DEFAULT FALSE,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (nome, mapa_id, tipo)
+        )
         """
     ]
 
@@ -159,6 +195,130 @@ def inicializar_banco():
             SELECT telegram_id, nome FROM membros
             ON CONFLICT (telegram_id, nome) DO NOTHING
         """)
+
+        mapas_iniciais = [
+            (1, "Planície", 1, 1, 2, 1262, 1010, "Mapa inicial do jogo.", "Wikia oficial + Railway Archivus", False),
+            (2, "Floresta Sombria", 8, None, 3, 2000, 1600, None, "Wikia oficial + Railway Archivus", False),
+            (3, "Floresta Profunda", None, None, None, None, None, None, "Biblioteca restaurada + site oficial", False),
+            (4, "Pântano", 15, None, 2, 2937, 2350, None, "Wikia oficial + Railway Archivus", False),
+            (5, "Cemitério Antigo", 22, None, 5, 8537, 6930, "Chamado de Cemitério no Archivus.", "Wikia oficial + Railway Archivus", False),
+            (6, "Deserto Escaldante", 32, None, 3, 9737, 7890, None, "Wikia oficial + Railway Archivus", False),
+            (7, "Oásis Perdido", 35, 4, 5, None, None, "Chamado de Oásis no Archivus.", "Histórico do Teletofus + Railway Archivus", True),
+            (8, "Montanhas Gélidas", 42, 4, None, None, None, None, "Wikia oficial + histórico do Teletofus", True),
+            (9, "Fortaleza dos Orcs", 44, None, None, None, None, "Mapa de guerra entre as facções Goblin e Orc.", "Site oficial + histórico do Teletofus", True),
+            (10, "Abismo", 52, None, None, None, None, None, "Wikia oficial", False),
+        ]
+        cur.executemany("""
+            INSERT INTO catalogo_mapas
+                (ordem, nome, nivel_minimo, dificuldade, tempo_masmorra,
+                 xp_masmorra_4, xp_masmorra_5, descricao, fonte, confirmado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (nome) DO NOTHING
+        """, mapas_iniciais)
+
+        monstros_iniciais = [
+            # Planície — caçada
+            (1, "Rato", "Planície", "Caçada", "Comum", 30, 3, 0, 8, 5, None, "Wikia oficial + Railway Archivus (Rato Gigante)", False),
+            (2, "Lobo", "Planície", "Caçada", "Comum", 40, 5, 1, 12, 8, None, "Wikia oficial + Railway Archivus", False),
+            (3, "Aranha", "Planície", "Caçada", "Comum", 50, 6, 2, 15, 10, None, "Wikia oficial + Railway Archivus", False),
+            (4, "Bandido", "Planície", "Caçada", "Comum", 60, 8, 2, 20, 15, None, "Wikia oficial + Railway Archivus", False),
+            (5, "Troll", "Planície", "Caçada", "Incomum", 80, 10, 3, 30, 20, None, "Wikia oficial + Railway Archivus (Troll Jovem)", False),
+            (6, "Minotauro Batedor", "Planície", "Caçada", "Raro", 100, 12, 4, 50, 35, None, "Wikia oficial + Railway Archivus", False),
+            (7, "Lobo Alfa", "Planície", "Masmorra", "Elite", 140, 16, 6, 400, 60, None, "Wikia oficial", False),
+            (8, "Aranha Rochedo", "Planície", "Masmorra", "Elite", 160, 18, 7, 500, 70, None, "Wikia oficial", False),
+            (9, "Batedor Goblin", "Planície", "Masmorra", "Elite", 170, 20, 7, 600, 80, None, "Wikia oficial", False),
+            (10, "Senhor dos Rochedos", "Planície", "Masmorra", "Boss", 350, 30, 15, 900, 150, None, "Wikia oficial", False),
+
+            # Floresta Sombria
+            (11, "Goblin", "Floresta Sombria", "Caçada", "Comum", 90, 12, 3, 35, 25, None, "Wikia oficial + Railway Archivus", False),
+            (12, "Vespa", "Floresta Sombria", "Caçada", "Comum", 100, 15, 3, 40, 28, None, "Wikia oficial + Railway Archivus (Vespa Gigante)", False),
+            (13, "Javali", "Floresta Sombria", "Caçada", "Comum", 120, 18, 4, 45, 30, None, "Wikia oficial + Railway Archivus", False),
+            (14, "Elfo Ladino", "Floresta Sombria", "Caçada", "Incomum", 140, 22, 5, 60, 45, None, "Wikia oficial + Railway Archivus (Elfo Saqueador)", False),
+            (15, "Urso", "Floresta Sombria", "Caçada", "Incomum", 170, 24, 6, 70, 50, None, "Wikia oficial + Railway Archivus", False),
+            (16, "Ent", "Floresta Sombria", "Caçada", "Boss", 260, 30, 10, 130, 90, None, "Wikia oficial", False),
+            (17, "Ent Jovem", "Floresta Sombria", "Masmorra", "Elite", 300, 35, 12, 600, 85, None, "Wikia oficial", False),
+            (18, "Aranha da Mata", "Floresta Sombria", "Masmorra", "Elite", 310, 38, 10, 800, 90, None, "Wikia oficial", False),
+            (19, "Batedor Elfo", "Floresta Sombria", "Masmorra", "Elite", 330, 40, 11, 1000, 100, None, "Wikia oficial", False),
+            (20, "Guardião do Bosque", "Floresta Sombria", "Masmorra", "Boss", 500, 55, 20, 1400, 200, None, "Wikia oficial", False),
+
+            # Pântano
+            (21, "Slime", "Pântano", "Caçada", "Comum", 160, 22, 5, 70, 60, None, "Wikia oficial + Railway Archivus", False),
+            (22, "Sanguessuga", "Pântano", "Caçada", "Comum", 170, 24, 5, 75, 62, None, "Wikia oficial + Railway Archivus", False),
+            (23, "Orc do Pântano", "Pântano", "Caçada", "Incomum", 190, 28, 6, 90, 70, None, "Wikia oficial + Railway Archivus", False),
+            (24, "Bruxa", "Pântano", "Caçada", "Incomum", 210, 32, 8, 110, 80, None, "Wikia oficial + Railway Archivus", False),
+            (25, "Carniçal", "Pântano", "Caçada", "Incomum", 230, 30, 7, 120, 85, None, "Wikia oficial + Railway Archivus", False),
+            (26, "Filhote de Hidra", "Pântano", "Caçada", "Boss", 320, 38, 10, 200, 150, None, "Wikia oficial", False),
+            (27, "Orc do Pântano", "Pântano", "Masmorra", "Elite", 350, 45, 14, 900, 110, None, "Wikia oficial", False),
+            (28, "Bruxa do Brejo", "Pântano", "Masmorra", "Elite", 340, 50, 12, 1100, 120, None, "Wikia oficial", False),
+            (29, "Sanguessuga Gigante", "Pântano", "Masmorra", "Elite", 380, 48, 15, 1300, 135, None, "Wikia oficial", False),
+            (30, "Hidra Menor", "Pântano", "Masmorra", "Boss", 600, 70, 25, 2200, 250, None, "Wikia oficial", False),
+
+            # Cemitério Antigo
+            (31, "Esqueleto", "Cemitério Antigo", "Caçada", "Comum", 200, 28, 7, 110, 90, None, "Wikia oficial + Railway Archivus", False),
+            (32, "Zumbi", "Cemitério Antigo", "Caçada", "Comum", 220, 30, 7, 120, 95, None, "Wikia oficial + Railway Archivus", False),
+            (33, "Múmia", "Cemitério Antigo", "Caçada", "Incomum", 240, 32, 8, 135, 100, None, "Wikia oficial + Railway Archivus", False),
+            (34, "Aprendiz de Necro", "Cemitério Antigo", "Caçada", "Incomum", 230, 36, 9, 150, 120, None, "Wikia oficial + Railway Archivus", False),
+            (35, "Espectro", "Cemitério Antigo", "Caçada", "Raro", 260, 40, 12, 180, 150, None, "Wikia oficial + Railway Archivus", False),
+            (36, "Lich", "Cemitério Antigo", "Caçada", "Boss", 350, 50, 15, 260, 220, None, "Wikia oficial", False),
+            (37, "Cavaleiro Sombrio", "Cemitério Antigo", "Masmorra", "Elite", 600, 80, 30, 2000, 300, None, "Wikia oficial", False),
+            (38, "Cultista Abissal", "Cemitério Antigo", "Masmorra", "Elite", 550, 90, 25, 2600, 310, None, "Wikia oficial", False),
+            (39, "Golem de Osso", "Cemitério Antigo", "Masmorra", "Elite", 700, 85, 35, 3200, 330, None, "Wikia oficial", False),
+            (40, "Arquilorde dos Ossos", "Cemitério Antigo", "Masmorra", "Raid Boss", 1200, 120, 50, 5500, 600, None, "Wikia oficial", False),
+
+            # Deserto Escaldante
+            (41, "Escorpião", "Deserto Escaldante", "Caçada", "Comum", 230, 35, 10, 160, 130, None, "Wikia oficial + Railway Archivus", False),
+            (42, "Verme da Areia", "Deserto Escaldante", "Caçada", "Incomum", 260, 38, 10, 180, 140, None, "Wikia oficial + Railway Archivus (Verme de Areia)", False),
+            (43, "Nômade", "Deserto Escaldante", "Caçada", "Incomum", 240, 42, 12, 190, 150, None, "Wikia oficial + Railway Archivus", False),
+            (44, "Escaravelho", "Deserto Escaldante", "Caçada", "Raro", 280, 44, 13, 210, 170, None, "Wikia oficial + Railway Archivus", False),
+            (45, "Diabrete de Fogo", "Deserto Escaldante", "Caçada", "Raro", 250, 48, 12, 230, 180, None, "Wikia oficial + Railway Archivus", False),
+            (46, "Guardião Ancestral", "Deserto Escaldante", "Caçada", "Boss", 380, 55, 18, 320, 260, None, "Wikia oficial", False),
+            (47, "Escorpião Titã", "Deserto Escaldante", "Masmorra", "Elite", 650, 90, 35, 2800, 320, None, "Wikia oficial", False),
+            (48, "Verme Gigante", "Deserto Escaldante", "Masmorra", "Elite", 700, 95, 30, 3500, 340, None, "Wikia oficial", False),
+            (49, "Elemental de Areia", "Deserto Escaldante", "Masmorra", "Elite", 680, 100, 32, 4200, 360, None, "Wikia oficial", False),
+            (50, "Faraó Maldito", "Deserto Escaldante", "Masmorra", "Raid Boss", 1300, 130, 55, 7500, 650, None, "Wikia oficial", False),
+
+            # Oásis Perdido — registros do Railway ainda sem ATK/DEF/Gold
+            (51, "Karkto Feroz", "Oásis Perdido", "Caçada", None, 420, None, None, 245, None, None, "Railway Archivus", False),
+            (52, "Cobra do Deserto", "Oásis Perdido", "Caçada", None, 360, None, None, 215, None, None, "Railway Archivus", False),
+            (53, "Abutre de Fogo", "Oásis Perdido", "Caçada", None, 400, None, None, 230, None, None, "Railway Archivus", False),
+            (54, "Lince Saqueadora", "Oásis Perdido", "Caçada", None, 440, None, None, 260, None, None, "Railway Archivus", False),
+            (55, "Lagarto da Areia", "Oásis Perdido", "Caçada", None, 380, None, None, 210, None, None, "Railway Archivus", False),
+            (56, "Guardião Raiz Profanado", "Oásis Perdido", "Masmorra", "Boss", 1211, None, None, None, None, None, "Histórico atual do Teletofus", True),
+
+            # Montanhas Gélidas
+            (57, "Golem de Gelo", "Montanhas Gélidas", "Caçada", "Incomum", 320, 50, 16, 260, 200, None, "Wikia oficial", False),
+            (58, "Harpia", "Montanhas Gélidas", "Caçada", "Incomum", 300, 48, 14, 250, 190, None, "Wikia oficial", False),
+            (59, "Orc do Gelo", "Montanhas Gélidas", "Caçada", "Incomum", 310, 52, 15, 260, 200, None, "Wikia oficial", False),
+            (60, "Yeti", "Montanhas Gélidas", "Caçada", "Raro", 340, 54, 17, 280, 220, None, "Wikia oficial", False),
+            (61, "Wyvern", "Montanhas Gélidas", "Caçada", "Raro", 360, 58, 18, 320, 240, None, "Wikia oficial", False),
+            (62, "Dragão Jovem", "Montanhas Gélidas", "Caçada", "Boss", 480, 70, 22, 420, 320, None, "Wikia oficial", False),
+
+            # Fortaleza dos Orcs — patch oficial; estatísticas ainda a confirmar
+            (63, "Orc", "Fortaleza dos Orcs", "Caçada", None, None, None, None, None, None, "Pele de Goblin", "Notícia oficial do Teletofus", False),
+            (64, "Goblin", "Fortaleza dos Orcs", "Caçada", None, None, None, None, None, None, "Pele de Orc", "Notícia oficial do Teletofus", False),
+
+            # Abismo
+            (65, "Demônio Menor", "Abismo", "Caçada", "Raro", 380, 68, 20, 380, 280, None, "Wikia oficial", False),
+            (66, "Cavaleiro Sombrio", "Abismo", "Caçada", "Raro", 420, 72, 22, 420, 300, None, "Wikia oficial", False),
+            (67, "Cultista", "Abismo", "Caçada", "Raro", 390, 70, 21, 410, 290, None, "Wikia oficial", False),
+            (68, "Cão do Inferno", "Abismo", "Caçada", "Raro", 400, 75, 21, 440, 310, None, "Wikia oficial", False),
+            (69, "Cria do Vazio", "Abismo", "Caçada", "Raro", 430, 78, 23, 460, 330, None, "Wikia oficial", False),
+            (70, "Lorde do Abismo", "Abismo", "Caçada", "Boss", 650, 95, 28, 620, 480, None, "Wikia oficial", False),
+        ]
+        cur.executemany("""
+            INSERT INTO catalogo_monstros
+                (ordem, nome, mapa_id, tipo, raridade, hp, atk, defesa,
+                 xp, gold, drops, fonte, confirmado)
+            SELECT %s, %s, id, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            FROM catalogo_mapas
+            WHERE nome = %s
+            ON CONFLICT (nome, mapa_id, tipo) DO NOTHING
+        """, [
+            (ordem, nome, tipo, raridade, hp, atk, defesa, xp, gold,
+             drops, fonte, confirmado, mapa)
+            for ordem, nome, mapa, tipo, raridade, hp, atk, defesa,
+                xp, gold, drops, fonte, confirmado in monstros_iniciais
+        ])
         conn.commit()
         print("0 - Estrutura do banco verificada")
     finally:
@@ -1809,6 +1969,239 @@ async def cmd_gibbygeral(update, context):
 
     await update.message.reply_text(texto)
 
+async def enviar_em_partes(update, texto, limite=3800):
+
+    parte = ""
+
+    for linha in texto.splitlines():
+        candidato = f"{parte}\n{linha}" if parte else linha
+
+        if len(candidato) > limite and parte:
+            await update.message.reply_text(parte)
+            parte = linha
+        else:
+            parte = candidato
+
+    if parte:
+        await update.message.reply_text(parte)
+
+
+def argumento_numerico(context):
+
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        return None
+
+    numero = int(context.args[0])
+    return numero if numero > 0 else None
+
+
+def formatar_valor_catalogo(valor):
+
+    if valor is None:
+        return "a confirmar"
+
+    if hasattr(valor, "to_integral_value") and valor == valor.to_integral_value():
+        return str(int(valor))
+
+    return str(valor)
+
+
+async def cmd_mapa(update, context):
+
+    # O catálogo fica silencioso nos grupos durante a fase de testes.
+    if update.effective_chat.type != "private":
+        return
+
+    if not await validar_acesso(update, context, "/mapa"):
+        return
+
+    numero = argumento_numerico(context) if context.args else None
+
+    if context.args and numero is None:
+        await update.message.reply_text(
+            "Use /mapa para listar ou /mapa NÚMERO para consultar."
+        )
+        return
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT id, nome, nivel_minimo, dificuldade, tempo_masmorra,
+                   xp_masmorra_4, xp_masmorra_5, descricao, fonte, confirmado
+            FROM catalogo_mapas
+            ORDER BY ordem, id
+        """)
+        mapas = cur.fetchall()
+
+        if not numero:
+            linhas = ["🗺️ MAPAS DO TELETOFUS", ""]
+
+            for indice, mapa in enumerate(mapas, start=1):
+                nivel = f"Lv {mapa[2]}" if mapa[2] is not None else "nível a confirmar"
+                linhas.append(f"{indice}. {mapa[1]} — {nivel}")
+
+            linhas.extend(["", "Consulte os detalhes com /mapa número."])
+            await enviar_em_partes(update, "\n".join(linhas))
+            return
+
+        if numero > len(mapas):
+            await update.message.reply_text(
+                f"Mapa inexistente. Escolha um número entre 1 e {len(mapas)}."
+            )
+            return
+
+        (mapa_id, nome, nivel, dificuldade, tempo_masmorra,
+         xp_masmorra_4, xp_masmorra_5, descricao, fonte,
+         confirmado) = mapas[numero - 1]
+
+        cur.execute("""
+            SELECT nome, tipo
+            FROM catalogo_monstros
+            WHERE mapa_id=%s
+            ORDER BY ordem, id
+        """, (mapa_id,))
+        monstros = cur.fetchall()
+
+        cur.execute("""
+            SELECT nome
+            FROM itens_legends
+            WHERE mapa=%s
+            ORDER BY nivel NULLS LAST, nome
+            LIMIT 6
+        """, (nome,))
+        itens = [linha[0] for linha in cur.fetchall()]
+
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM itens_legends
+            WHERE mapa=%s
+        """, (nome,))
+        total_itens = cur.fetchone()[0]
+
+        linhas = [
+            f"🗺️ MAPA {numero} — {nome}",
+            "",
+            f"⭐ Nível mínimo: {formatar_valor_catalogo(nivel)}",
+            f"⚔️ Dificuldade: {formatar_valor_catalogo(dificuldade)}",
+            f"🔎 Estado: {'confirmado' if confirmado else 'a confirmar/atualizar'}",
+            f"📚 Fonte: {fonte}",
+        ]
+
+        if descricao:
+            linhas.extend(["", descricao])
+
+        if tempo_masmorra or xp_masmorra_4 or xp_masmorra_5:
+            linhas.extend(["", "🏛️ Referência de masmorra do Archivus"])
+
+            if tempo_masmorra:
+                linhas.append(f"• Tempo ideal: {tempo_masmorra} min")
+
+            if xp_masmorra_4:
+                linhas.append(f"• 4 jogadores: {xp_masmorra_4:,} XP".replace(",", "."))
+
+            if xp_masmorra_5:
+                linhas.append(f"• 5 jogadores: {xp_masmorra_5:,} XP".replace(",", "."))
+
+        linhas.extend(["", f"👹 Monstros cadastrados: {len(monstros)}"])
+        linhas.extend(f"• {monstro} ({tipo})" for monstro, tipo in monstros)
+
+        linhas.extend(["", f"🎁 Itens associados: {total_itens}"])
+        linhas.extend(f"• {item}" for item in itens)
+
+        if total_itens > len(itens):
+            linhas.append(f"• e mais {total_itens - len(itens)} item(ns)")
+
+        await enviar_em_partes(update, "\n".join(linhas))
+
+    except Exception as erro:
+        conn.rollback()
+        print(f"Erro catálogo de mapas: {erro}")
+        await update.message.reply_text(
+            "Não consegui consultar os mapas agora. Tente novamente em instantes."
+        )
+    finally:
+        cur.close()
+
+
+async def cmd_monstro(update, context):
+
+    # O bestiário fica silencioso nos grupos durante a fase de testes.
+    if update.effective_chat.type != "private":
+        return
+
+    if not await validar_acesso(update, context, "/monstro"):
+        return
+
+    numero = argumento_numerico(context) if context.args else None
+
+    if context.args and numero is None:
+        await update.message.reply_text(
+            "Use /monstro para listar ou /monstro NÚMERO para consultar."
+        )
+        return
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT cm.nome, mp.nome, cm.tipo, cm.raridade, cm.hp,
+                   cm.atk, cm.defesa, cm.xp, cm.gold, cm.drops,
+                   cm.fonte, cm.confirmado
+            FROM catalogo_monstros cm
+            LEFT JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
+            ORDER BY cm.ordem, cm.id
+        """)
+        monstros = cur.fetchall()
+
+        if not numero:
+            linhas = ["👹 BESTIÁRIO DO TELETOFUS", ""]
+
+            for indice, monstro in enumerate(monstros, start=1):
+                linhas.append(f"{indice}. {monstro[0]} — {monstro[1] or 'mapa a confirmar'}")
+
+            linhas.extend(["", "Consulte os detalhes com /monstro número."])
+            await enviar_em_partes(update, "\n".join(linhas))
+            return
+
+        if numero > len(monstros):
+            await update.message.reply_text(
+                f"Monstro inexistente. Escolha um número entre 1 e {len(monstros)}."
+            )
+            return
+
+        (nome, mapa, tipo, raridade, hp, atk, defesa, xp, gold,
+         drops, fonte, confirmado) = monstros[numero - 1]
+
+        linhas = [
+            f"👹 MONSTRO {numero} — {nome}",
+            "",
+            f"🗺️ Mapa: {mapa or 'a confirmar'}",
+            f"🏷️ Tipo: {tipo or 'a confirmar'}",
+            f"💠 Raridade: {raridade or 'a confirmar'}",
+            f"❤️ HP: {formatar_valor_catalogo(hp)}",
+            f"⚔️ ATK: {formatar_valor_catalogo(atk)}",
+            f"🛡️ DEF: {formatar_valor_catalogo(defesa)}",
+            f"⭐ XP: {formatar_valor_catalogo(xp)}",
+            f"💰 Gold: {formatar_valor_catalogo(gold)}",
+            f"🎁 Drops: {drops or 'a confirmar'}",
+            "",
+            f"🔎 Estado: {'confirmado' if confirmado else 'a confirmar/atualizar'}",
+            f"📚 Fonte: {fonte}",
+        ]
+
+        await update.message.reply_text("\n".join(linhas))
+
+    except Exception as erro:
+        conn.rollback()
+        print(f"Erro bestiário: {erro}")
+        await update.message.reply_text(
+            "Não consegui consultar o bestiário agora. Tente novamente em instantes."
+        )
+    finally:
+        cur.close()
+
+
 async def cmd_start(update, context):
 
     if context.args and context.args[0] == "item":
@@ -2775,6 +3168,20 @@ def main():
         CommandHandler(
             "item",
             cmd_item
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "mapa",
+            cmd_mapa
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "monstro",
+            cmd_monstro
         )
     )
 
