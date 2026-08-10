@@ -2056,10 +2056,14 @@ async def cmd_mapa(update, context):
          confirmado) = mapas[numero - 1]
 
         cur.execute("""
-            SELECT nome, tipo
-            FROM catalogo_monstros
+            SELECT numero, nome, tipo
+            FROM (
+                SELECT ROW_NUMBER() OVER (ORDER BY ordem, id) AS numero,
+                       nome, tipo, mapa_id
+                FROM catalogo_monstros
+            ) catalogo_numerado
             WHERE mapa_id=%s
-            ORDER BY ordem, id
+            ORDER BY numero
         """, (mapa_id,))
         monstros = cur.fetchall()
 
@@ -2104,7 +2108,10 @@ async def cmd_mapa(update, context):
                 linhas.append(f"• 5 jogadores: {xp_masmorra_5:,} XP".replace(",", "."))
 
         linhas.extend(["", f"👹 Monstros cadastrados: {len(monstros)}"])
-        linhas.extend(f"• {monstro} ({tipo})" for monstro, tipo in monstros)
+        linhas.extend(
+            f"• {numero}. {monstro} ({tipo})"
+            for numero, monstro, tipo in monstros
+        )
 
         linhas.extend(["", f"🎁 Itens associados: {total_itens}"])
         linhas.extend(f"• {item}" for item in itens)
