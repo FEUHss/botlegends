@@ -64,7 +64,17 @@ def inicializar_banco():
             nome TEXT NOT NULL,
             xp BIGINT,
             nivel INTEGER,
-            xp_restante BIGINT,
+            data_hora TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS xp_progresso (
+            id BIGSERIAL PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            nome TEXT NOT NULL,
+            xp BIGINT NOT NULL,
+            nivel INTEGER,
+            xp_restante BIGINT NOT NULL,
             data_hora TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
         """,
@@ -140,17 +150,9 @@ def inicializar_banco():
     try:
         for ddl in tabelas:
             cur.execute(ddl)
-        # Migração aditiva para bancos restaurados que já possuem xp_logs.
-        cur.execute(
-            "ALTER TABLE xp_logs ADD COLUMN IF NOT EXISTS xp_restante BIGINT"
-        )
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_xp_logs_telegram_data
-            ON xp_logs (telegram_id, data_hora DESC)
-        """)
-        cur.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_membros_nome_normalizado
-            ON membros (UPPER(nome))
+            CREATE INDEX IF NOT EXISTS idx_xp_progresso_telegram_data
+            ON xp_progresso (telegram_id, data_hora DESC)
         """)
         cur.execute("""
             INSERT INTO membro_vinculos (telegram_id, nome)
@@ -320,7 +322,9 @@ def registrar_membro(tg_id, nome):
 
         # O ID do Telegram é a identidade estável. Atualiza o nick de exibição
         # nos registros associados para rankings, presença, caçadas e Gibby.
-        for tabela in ("presencas", "xp_logs", "status", "cacadas", "gibby_logs"):
+        for tabela in (
+            "presencas", "xp_logs", "xp_progresso", "status", "cacadas", "gibby_logs"
+        ):
             cur.execute(
                 f"UPDATE {tabela} SET nome=%s WHERE telegram_id=%s AND nome<>%s",
                 (nome, tg_id, nome)
@@ -350,30 +354,45 @@ def salvar_xp(tg_id,nome,xp,nivel,xp_restante=None):
         return
 
     cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT xp
+            FROM xp_logs
+            WHERE telegram_id=%s
+            ORDER BY data_hora DESC
+            LIMIT 1
+        """, (tg_id,))
 
-    cur.execute("""
-        SELECT xp, nivel, xp_restante
-        FROM xp_logs
-        WHERE telegram_id=%s
-        ORDER BY data_hora DESC
-        LIMIT 1
-    """, (tg_id,))
+        ultimo = cur.fetchone()
+        if not ultimo or ultimo[0] != xp:
+            cur.execute(
+                "INSERT INTO xp_logs (telegram_id,nome,xp,nivel) VALUES (%s,%s,%s,%s)",
+                (tg_id,nome,xp,nivel)
+            )
 
-    ultimo = cur.fetchone()
+        if xp_restante is not None:
+            cur.execute("""
+                SELECT xp, nivel, xp_restante
+                FROM xp_progresso
+                WHERE telegram_id=%s
+                ORDER BY data_hora DESC
+                LIMIT 1
+            """, (tg_id,))
 
-    if ultimo and ultimo == (xp, nivel, xp_restante):
+            ultimo_progresso = cur.fetchone()
+            if ultimo_progresso != (xp, nivel, xp_restante):
+                cur.execute("""
+                    INSERT INTO xp_progresso
+                    (telegram_id,nome,xp,nivel,xp_restante)
+                    VALUES (%s,%s,%s,%s,%s)
+                """, (tg_id,nome,xp,nivel,xp_restante))
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         cur.close()
-        return
-
-    cur.execute(
-        """INSERT INTO xp_logs
-           (telegram_id,nome,xp,nivel,xp_restante)
-           VALUES (%s,%s,%s,%s,%s)""",
-        (tg_id,nome,xp,nivel,xp_restante)
-    )
-
-    conn.commit()
-    cur.close()
 
 def salvar_status(tg_id,nome,d):
     if not d: return
@@ -869,8 +888,8 @@ def gerar_up(tg_id):
     try:
         cur.execute("""
             SELECT nome, nivel, xp, xp_restante, data_hora
-            FROM xp_logs
-            WHERE telegram_id=%s AND xp_restante IS NOT NULL
+            FROM xp_progresso
+            WHERE telegram_id=%s
             ORDER BY data_hora DESC
             LIMIT 1
         """, (tg_id,))
