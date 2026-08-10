@@ -3,7 +3,7 @@ import re
 import random
 import psycopg2
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -40,6 +40,15 @@ def inicializar_banco():
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS membro_vinculos (
+            telegram_id BIGINT NOT NULL,
+            nome TEXT NOT NULL,
+            primeira_vista TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            ultima_vista TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (telegram_id, nome)
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS presencas (
             id BIGSERIAL PRIMARY KEY,
             telegram_id BIGINT NOT NULL,
@@ -55,6 +64,7 @@ def inicializar_banco():
             nome TEXT NOT NULL,
             xp BIGINT,
             nivel INTEGER,
+            xp_restante BIGINT,
             data_hora TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
         """,
@@ -130,6 +140,23 @@ def inicializar_banco():
     try:
         for ddl in tabelas:
             cur.execute(ddl)
+        # Migração aditiva para bancos restaurados que já possuem xp_logs.
+        cur.execute(
+            "ALTER TABLE xp_logs ADD COLUMN IF NOT EXISTS xp_restante BIGINT"
+        )
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_xp_logs_telegram_data
+            ON xp_logs (telegram_id, data_hora DESC)
+        """)
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_membros_nome_normalizado
+            ON membros (UPPER(nome))
+        """)
+        cur.execute("""
+            INSERT INTO membro_vinculos (telegram_id, nome)
+            SELECT telegram_id, nome FROM membros
+            ON CONFLICT (telegram_id, nome) DO NOTHING
+        """)
         conn.commit()
         print("0 - Estrutura do banco verificada")
     finally:
@@ -183,6 +210,12 @@ def extrair_nome(texto):
 
 def extrair_xp(texto):
     match = re.search(r"\bXP\s*:\s*([\d.,]+)", texto, re.IGNORECASE)
+    if not match:
+        return None
+    return int(re.sub(r"\D", "", match.group(1)))
+
+def extrair_xp_restante(texto):
+    match = re.search(r"\bFaltam\s*:\s*([\d.,]+)", texto, re.IGNORECASE)
     if not match:
         return None
     return int(re.sub(r"\D", "", match.group(1)))
@@ -256,22 +289,50 @@ def extrair_status(texto):
 
 def registrar_membro(tg_id, nome):
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO membros (telegram_id,nome)
-        VALUES (%s,%s)
-        ON CONFLICT (telegram_id)
-        DO UPDATE SET nome=EXCLUDED.nome
-    """,(tg_id,nome))
+    try:
+        # Impede que um perfil já vinculado seja apropriado por outro ID.
+        cur.execute("""
+            SELECT telegram_id
+            FROM membros
+            WHERE UPPER(nome)=UPPER(%s) AND telegram_id<>%s
+            LIMIT 1
+            FOR UPDATE
+        """, (nome, tg_id))
 
-    # O ID do Telegram é a identidade estável. Corrige o nick também nos
-    # registros já existentes para rankings, presença, caçadas e Gibby.
-    for tabela in ("presencas", "xp_logs", "status", "cacadas", "gibby_logs"):
-        cur.execute(
-            f"UPDATE {tabela} SET nome=%s WHERE telegram_id=%s AND nome<>%s",
-            (nome, tg_id, nome)
-        )
+        if cur.fetchone():
+            conn.rollback()
+            return False
 
-    conn.commit()
+        cur.execute("""
+            INSERT INTO membros (telegram_id,nome)
+            VALUES (%s,%s)
+            ON CONFLICT (telegram_id)
+            DO UPDATE SET nome=EXCLUDED.nome
+        """, (tg_id, nome))
+
+        # Mantém uma trilha de troca de nick sem apagar o vínculo anterior.
+        cur.execute("""
+            INSERT INTO membro_vinculos (telegram_id,nome)
+            VALUES (%s,%s)
+            ON CONFLICT (telegram_id,nome)
+            DO UPDATE SET ultima_vista=CURRENT_TIMESTAMP
+        """, (tg_id, nome))
+
+        # O ID do Telegram é a identidade estável. Atualiza o nick de exibição
+        # nos registros associados para rankings, presença, caçadas e Gibby.
+        for tabela in ("presencas", "xp_logs", "status", "cacadas", "gibby_logs"):
+            cur.execute(
+                f"UPDATE {tabela} SET nome=%s WHERE telegram_id=%s AND nome<>%s",
+                (nome, tg_id, nome)
+            )
+
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
 
 def salvar_presenca(tg_id,nome):
     cur = conn.cursor()
@@ -283,7 +344,7 @@ def salvar_presenca(tg_id,nome):
     conn.commit()
     return inseriu
 
-def salvar_xp(tg_id,nome,xp,nivel):
+def salvar_xp(tg_id,nome,xp,nivel,xp_restante=None):
 
     if xp is None:
         return
@@ -291,7 +352,7 @@ def salvar_xp(tg_id,nome,xp,nivel):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT xp
+        SELECT xp, nivel, xp_restante
         FROM xp_logs
         WHERE telegram_id=%s
         ORDER BY data_hora DESC
@@ -300,15 +361,19 @@ def salvar_xp(tg_id,nome,xp,nivel):
 
     ultimo = cur.fetchone()
 
-    if ultimo and ultimo[0] == xp:
+    if ultimo and ultimo == (xp, nivel, xp_restante):
+        cur.close()
         return
 
     cur.execute(
-        "INSERT INTO xp_logs (telegram_id,nome,xp,nivel) VALUES (%s,%s,%s,%s)",
-        (tg_id,nome,xp,nivel)
+        """INSERT INTO xp_logs
+           (telegram_id,nome,xp,nivel,xp_restante)
+           VALUES (%s,%s,%s,%s,%s)""",
+        (tg_id,nome,xp,nivel,xp_restante)
     )
 
     conn.commit()
+    cur.close()
 
 def salvar_status(tg_id,nome,d):
     if not d: return
@@ -785,6 +850,105 @@ def ranking_xpdif():
 
     return texto
 
+def formatar_numero(valor):
+    return f"{int(valor):,}".replace(",", ".")
+
+def faixa_previsao(dias):
+    if dias <= 1:
+        return "hoje ou amanhã"
+    if dias < 3:
+        return "em menos de 3 dias"
+    if dias <= 7:
+        return "entre 3 e 7 dias"
+    if dias <= 14:
+        return "entre 1 e 2 semanas"
+    return "em mais de 2 semanas"
+
+def gerar_up(tg_id):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT nome, nivel, xp, xp_restante, data_hora
+            FROM xp_logs
+            WHERE telegram_id=%s AND xp_restante IS NOT NULL
+            ORDER BY data_hora DESC
+            LIMIT 1
+        """, (tg_id,))
+
+        ultimo = cur.fetchone()
+        if not ultimo:
+            return (
+                "📈 EXP TRACKER\n\n"
+                "Ainda não tenho o XP restante desse personagem. "
+                "Encaminhe um perfil atualizado no tópico de presença."
+            )
+
+        nome, nivel, xp, xp_restante, data_ultimo = ultimo
+        inicio = data_ultimo - timedelta(days=7)
+
+        # Um snapshot por dia evita que vários perfis no mesmo dia distorçam
+        # a média. XP total é cumulativo, inclusive após subir de nível.
+        cur.execute("""
+            SELECT dia, xp
+            FROM (
+                SELECT DISTINCT ON (
+                    (data_hora AT TIME ZONE 'America/Sao_Paulo')::date
+                )
+                    (data_hora AT TIME ZONE 'America/Sao_Paulo')::date AS dia,
+                    xp,
+                    data_hora
+                FROM xp_logs
+                WHERE telegram_id=%s
+                  AND data_hora BETWEEN %s AND %s
+                ORDER BY
+                    (data_hora AT TIME ZONE 'America/Sao_Paulo')::date,
+                    data_hora DESC
+            ) diarios
+            ORDER BY dia
+        """, (tg_id, inicio, data_ultimo))
+
+        diarios = cur.fetchall()
+        cabecalho = (
+            f"📈 EXP TRACKER — {nome}\n\n"
+            f"⭐ Nível: {nivel}\n"
+            f"✨ XP total: {formatar_numero(xp)}\n"
+            f"🎯 Faltam: {formatar_numero(xp_restante)} XP\n"
+        )
+
+        if len(diarios) < 2:
+            return (
+                cabecalho
+                + "\n⏳ Ainda falta histórico diário para calcular o ritmo.\n"
+                + "Envie outro perfil em um próximo dia e use /up novamente."
+            )
+
+        primeira_data, primeiro_xp = diarios[0]
+        ultima_data, ultimo_xp = diarios[-1]
+        dias_observados = (ultima_data - primeira_data).days
+        ganho = ultimo_xp - primeiro_xp
+
+        if dias_observados < 1 or ganho <= 0:
+            return (
+                cabecalho
+                + "\n➖ Não houve ganho positivo suficiente no período "
+                + "para projetar a subida de nível."
+            )
+
+        media = ganho / dias_observados
+        dias_estimados = xp_restante / media if media > 0 else 0
+
+        return (
+            cabecalho
+            + f"\n📊 Ganho em {dias_observados} dia(s): "
+            + f"{formatar_numero(ganho)} XP\n"
+            + f"⚡ Média: {formatar_numero(round(media))} XP/dia\n"
+            + f"🗓 Previsão: {faixa_previsao(dias_estimados)} "
+            + f"(~{dias_estimados:.1f} dia(s))\n\n"
+            + "ℹ️ Estimativa baseada nos perfis dos últimos 7 dias."
+        )
+    finally:
+        cur.close()
+
 async def cmd_lista(update, context):
 
     if not await validar_acesso(
@@ -822,6 +986,19 @@ async def cmd_xpdif(update, context):
 
     await update.message.reply_text(
         ranking_xpdif()
+    )
+
+async def cmd_up(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/up"
+    ):
+        return
+
+    await update.message.reply_text(
+        gerar_up(update.effective_user.id)
     )
 
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -994,6 +1171,7 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     nome = extrair_nome(texto)
     xp = extrair_xp(texto)
+    xp_restante = extrair_xp_restante(texto)
     nivel = extrair_nivel(texto)
     status = extrair_status(texto)
 
@@ -1007,7 +1185,12 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     tg_id = msg.from_user.id
-    registrar_membro(tg_id, nome)
+    if not registrar_membro(tg_id, nome):
+        await msg.reply_text(
+            "⚠ Este personagem já está vinculado a outra conta do Telegram. "
+            "Os dados não foram alterados. Procure um administrador para revisar o vínculo."
+        )
+        return
 
     novo = salvar_presenca(
         tg_id,
@@ -1018,7 +1201,8 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tg_id,
         nome,
         xp,
-        nivel
+        nivel,
+        xp_restante
     )
 
     salvar_status(
@@ -2529,6 +2713,10 @@ def main():
     )
 
     app.add_handler(
+        CommandHandler("up", cmd_up)
+    )
+
+    app.add_handler(
         CommandHandler("cacada", cmd_cacada)
     )
 
@@ -2631,4 +2819,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
