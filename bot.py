@@ -24,7 +24,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Somente este usuário recebe e decide as propostas encontradas em LOOTS.
 LOOT_REVIEWER_ID = int(os.getenv("LOOT_REVIEWER_ID", "5285053532"))
-TELETOFUS_BOT_ID = int(os.getenv("TELETOFUS_BOT_ID", "6432962416"))
+TELETOFUS_BOT_ID = int(os.getenv("TELETOFUS_BOT_ID", "8564509864"))
 
 GRUPO_ID = -1003792787717
 
@@ -33,6 +33,17 @@ TOPICO_LOOTS = 19
 
 TOPICO_PILAR = 29992
 TOPICO_GIBBY = 82230
+
+# Nomes exibidos atualmente pelo bot oficial. Mantemos a grafia acentuada no
+# Atlas mesmo quando o jogo omite acentos em algumas telas.
+NOMES_MASMORRAS = {
+    "Planície": "Masmorra da Planície",
+    "Floresta Sombria": "Masmorra da Floresta",
+    "Pântano": "Masmorra do Pântano",
+    "Cemitério Antigo": "Covil do Lord",
+    "Deserto Escaldante": "Pirâmide do Deserto",
+    "Oásis Perdido": "Templo do Oásis",
+}
 
 conn = psycopg2.connect(DATABASE_URL)
 
@@ -398,7 +409,6 @@ def comando_permitido(msg):
         and msg.message_thread_id == TOPICO_PILAR
     )
 
-
 def hoje():
     return datetime.now(tz).date()
 
@@ -672,17 +682,18 @@ MSG_GIBBY_FALHA = [
 def membro_cadastrado(tg_id):
 
     cur = conn.cursor()
-
-    cur.execute(
-        """
-        SELECT 1
-        FROM membros
-        WHERE telegram_id=%s
-        """,
-        (tg_id,)
-    )
-
-    return cur.fetchone() is not None
+    try:
+        cur.execute(
+            """
+            SELECT 1
+            FROM membros
+            WHERE telegram_id=%s
+            """,
+            (tg_id,)
+        )
+        return cur.fetchone() is not None
+    finally:
+        cur.close()
 
 async def avisar_tentativa_acesso(
     context,
@@ -799,7 +810,6 @@ def extrair_cacada(texto):
     dados["lendarios"] = lendarios
 
     return dados
-
 
 def extrair_gibby(texto):
 
@@ -1201,7 +1211,6 @@ async def cmd_lista(update, context):
         gerar_lista()
     )
 
-
 async def cmd_xp(update, context):
 
     if not await validar_acesso(
@@ -1601,7 +1610,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             salvar_gibby(
                 tg_id,
-
                 nome,
                 dados_gibby["item"],
                 dados_gibby["nivel_origem"],
@@ -2002,7 +2010,6 @@ async def cmd_gibby(update, context):
                     THEN 1
                     ELSE 0
                 END
-
             )
         FROM gibby_logs
         WHERE telegram_id=%s
@@ -2348,107 +2355,300 @@ def formatar_valor_catalogo(valor):
 
 
 async def cmd_mapa(update, context):
-
-    # O catálogo fica silencioso nos grupos durante a fase de testes.
-    if update.effective_chat.type != "private":
-        return
-
     if not await validar_acesso(update, context, "/mapa"):
         return
 
-    numero = argumento_numerico(context) if context.args else None
-
-    if context.args and numero is None:
+    if update.effective_chat.type != "private":
+        bot_username = (await context.bot.get_me()).username
+        teclado = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "🗺️ Abrir Atlas Legends",
+                url=f"https://t.me/{bot_username}?start=atlas"
+            )
+        ]])
         await update.message.reply_text(
-            "Use /mapa para listar ou /mapa NÚMERO para consultar."
+            "🗺️ Pilar da Sabedoria:\n\n"
+            "Para evitar spam nos tópicos da guilda, o Atlas Legends "
+            "funciona apenas no privado.\n\n"
+            "Clique no botão abaixo para abrir o Atlas.",
+            reply_markup=teclado
         )
         return
 
+    if context.args:
+        numero = argumento_numerico(context)
+        if numero is None:
+            await update.message.reply_text(
+                "Use apenas /mapa para abrir o Atlas Legends."
+            )
+            return
+
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                SELECT id
+                FROM catalogo_mapas
+                ORDER BY ordem, id
+                OFFSET %s LIMIT 1
+            """, (numero - 1,))
+            resultado = cur.fetchone()
+        finally:
+            cur.close()
+
+        if not resultado:
+            await update.message.reply_text("Esse mapa não existe no Atlas.")
+            return
+
+        await mostrar_mapa_atlas(update.message, resultado[0])
+        return
+
+    await mostrar_inicio_atlas(update.message)
+
+
+def agrupar_botoes_atlas(botoes, colunas=2):
+    return [botoes[i:i + colunas] for i in range(0, len(botoes), colunas)]
+
+
+def nome_masmorra_atlas(nome_mapa):
+    return NOMES_MASMORRAS.get(nome_mapa, f"Masmorra de {nome_mapa}")
+
+
+async def mostrar_inicio_atlas(alvo, editar=False):
     cur = conn.cursor()
 
     try:
         cur.execute("""
-            SELECT id, nome, nivel_minimo
+            SELECT id, nome
             FROM catalogo_mapas
             ORDER BY ordem, id
         """)
         mapas = cur.fetchall()
-
-        if not numero:
-            linhas = ["🗺️ MAPAS DO TELETOFUS", ""]
-
-            for indice, mapa in enumerate(mapas, start=1):
-                nivel = f"Lv {mapa[2]}" if mapa[2] is not None else "nível a confirmar"
-                linhas.append(f"{indice}. {mapa[1]} — {nivel}")
-
-            linhas.extend(["", "Consulte os detalhes com /mapa número."])
-            await enviar_em_partes(update, "\n".join(linhas))
-            return
-
-        if numero > len(mapas):
-            await update.message.reply_text(
-                f"Mapa inexistente. Escolha um número entre 1 e {len(mapas)}."
+        botoes = [
+            InlineKeyboardButton(
+                f"🗺️ {nome}", callback_data=f"atlas_m_{mapa_id}"
             )
-            return
+            for mapa_id, nome in mapas
+        ]
+        teclado = InlineKeyboardMarkup(agrupar_botoes_atlas(botoes))
+        texto = "🗺️ ATLAS LEGENDS\n\nEscolha um mapa:"
 
-        mapa_id, nome, nivel = mapas[numero - 1][:3]
+        if editar:
+            await alvo.edit_message_text(texto, reply_markup=teclado)
+        else:
+            await alvo.reply_text(texto, reply_markup=teclado)
+    finally:
+        cur.close()
+
+
+async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT nome, nivel_minimo
+            FROM catalogo_mapas
+            WHERE id=%s
+        """, (mapa_id,))
+        mapa = cur.fetchone()
+        if not mapa:
+            texto = "Esse mapa não está mais disponível no Atlas."
+            teclado = InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Mapas", callback_data="atlas_inicio")
+            ]])
+        else:
+            nome, nivel = mapa
+            cur.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE LOWER(tipo)=LOWER('Caçada')),
+                    COUNT(*) FILTER (WHERE LOWER(tipo)=LOWER('Masmorra'))
+                FROM catalogo_monstros
+                WHERE mapa_id=%s
+            """, (mapa_id,))
+            total_cacada, total_masmorra = cur.fetchone()
+
+            cur.execute("""
+                SELECT COUNT(DISTINCT item_id)
+                FROM (
+                    SELECT id AS item_id
+                    FROM itens_legends
+                    WHERE mapa=%s
+                    UNION
+                    SELECT rel.item_id
+                    FROM item_drop_relacoes rel
+                    LEFT JOIN catalogo_monstros cm ON cm.id=rel.monstro_id
+                    WHERE rel.confirmado=TRUE
+                      AND (rel.mapa_id=%s OR cm.mapa_id=%s)
+                ) itens_do_mapa
+            """, (nome, mapa_id, mapa_id))
+            total_itens = cur.fetchone()[0]
+
+            texto = (
+                f"🗺️ {nome.upper()}\n\n"
+                f"⭐ Nível mínimo: {formatar_valor_catalogo(nivel)}   "
+                f"🎁 Itens: {total_itens}\n\n"
+                "Escolha uma área:"
+            )
+            linhas = []
+            if total_cacada:
+                linhas.append([InlineKeyboardButton(
+                    f"⚔️ Caçada ({total_cacada})",
+                    callback_data=f"atlas_t_{mapa_id}_c"
+                )])
+            if total_masmorra:
+                linhas.append([InlineKeyboardButton(
+                    f"🗝️ {nome_masmorra_atlas(nome)} ({total_masmorra})",
+                    callback_data=f"atlas_t_{mapa_id}_d"
+                )])
+            if not linhas:
+                texto += "\n\nAinda não há monstros cadastrados neste mapa."
+            linhas.append([
+                InlineKeyboardButton("⬅️ Mapas", callback_data="atlas_inicio")
+            ])
+            teclado = InlineKeyboardMarkup(linhas)
+
+        if editar:
+            await alvo.edit_message_text(texto, reply_markup=teclado)
+        else:
+            await alvo.reply_text(texto, reply_markup=teclado)
+    finally:
+        cur.close()
+
+
+async def mostrar_monstros_atlas(alvo, mapa_id, codigo_tipo):
+    tipo = "Caçada" if codigo_tipo == "c" else "Masmorra"
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT nome FROM catalogo_mapas WHERE id=%s", (mapa_id,))
+        resultado = cur.fetchone()
+        if not resultado:
+            await mostrar_inicio_atlas(alvo, editar=True)
+            return
+        nome_mapa = resultado[0]
 
         cur.execute("""
-            SELECT numero, nome, tipo
-            FROM (
-                SELECT ROW_NUMBER() OVER (ORDER BY ordem, id) AS numero,
-                       nome, tipo, mapa_id
-                FROM catalogo_monstros
-            ) catalogo_numerado
-            WHERE mapa_id=%s
-            ORDER BY numero
-        """, (mapa_id,))
-
+            SELECT ordem, id, nome
+            FROM catalogo_monstros
+            WHERE mapa_id=%s AND LOWER(tipo)=LOWER(%s)
+            ORDER BY ordem, id
+        """, (mapa_id, tipo))
         monstros = cur.fetchall()
 
-        cur.execute("""
-            SELECT COUNT(DISTINCT item_id)
-            FROM (
-                SELECT id AS item_id
-                FROM itens_legends
-                WHERE mapa=%s
-
-                UNION
-
-                SELECT rel.item_id
-                FROM item_drop_relacoes rel
-                LEFT JOIN catalogo_monstros cm ON cm.id=rel.monstro_id
-                WHERE rel.confirmado=TRUE
-                  AND (rel.mapa_id=%s OR cm.mapa_id=%s)
-            ) itens_do_mapa
-        """, (nome, mapa_id, mapa_id))
-        total_itens = cur.fetchone()[0]
-
-        linhas = [
-            f"🗺️ MAPA {numero} — {nome}",
-            "",
-            f"⭐ Nível mínimo: {formatar_valor_catalogo(nivel)}",
-            "📚 Fonte: Wikia oficial",
-        ]
-
-        linhas.extend(["", f"👹 Monstros cadastrados: {len(monstros)}"])
-        linhas.extend(
-            f"• {numero}. {monstro} ({tipo})"
-            for numero, monstro, tipo in monstros
+        titulo_area = (
+            "Caçada" if codigo_tipo == "c"
+            else nome_masmorra_atlas(nome_mapa)
         )
-
-        linhas.extend(["", f"🎁 Itens associados: {total_itens}"])
-
-        await enviar_em_partes(update, "\n".join(linhas))
-
-    except Exception as erro:
-        conn.rollback()
-        print(f"Erro catálogo de mapas: {erro}")
-        await update.message.reply_text(
-            "Não consegui consultar os mapas agora. Tente novamente em instantes."
+        botoes = [
+            InlineKeyboardButton(
+                f"{ordem}. {nome}",
+                callback_data=f"atlas_x_{monstro_id}_{mapa_id}_{codigo_tipo}"
+            )
+            for ordem, monstro_id, nome in monstros
+        ]
+        linhas = agrupar_botoes_atlas(botoes)
+        linhas.append([
+            InlineKeyboardButton(
+                f"⬅️ {nome_mapa}", callback_data=f"atlas_m_{mapa_id}"
+            )
+        ])
+        await alvo.edit_message_text(
+            f"👹 {titulo_area.upper()} — {nome_mapa.upper()}\n\n"
+            "Escolha um monstro:",
+            reply_markup=InlineKeyboardMarkup(linhas)
         )
     finally:
         cur.close()
+
+
+async def mostrar_monstro_atlas(
+    alvo, monstro_id, mapa_id, codigo_tipo
+):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT cm.ordem, cm.nome, mp.nome, cm.tipo, cm.raridade,
+                   cm.hp, cm.atk, cm.defesa, cm.xp, cm.gold, cm.drops
+            FROM catalogo_monstros cm
+            JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
+            WHERE cm.id=%s AND cm.mapa_id=%s
+        """, (monstro_id, mapa_id))
+        monstro = cur.fetchone()
+        if not monstro:
+            await mostrar_monstros_atlas(alvo, mapa_id, codigo_tipo)
+            return
+
+        (ordem, nome, mapa, tipo, raridade, hp, atk, defesa, xp, gold,
+         drops) = monstro
+        cur.execute("""
+            SELECT il.nome
+            FROM item_drop_relacoes rel
+            JOIN itens_legends il ON il.id=rel.item_id
+            WHERE rel.monstro_id=%s AND rel.confirmado=TRUE
+            ORDER BY il.nome
+        """, (monstro_id,))
+        drops_relacionados = [linha[0] for linha in cur.fetchall()]
+
+        texto = (
+            f"👹 MONSTRO {ordem} — {nome}\n\n"
+            f"🗺️ {mapa}   🏷️ {tipo or 'a confirmar'}   "
+            f"💠 {raridade or 'a confirmar'}\n"
+            f"❤️ HP: {formatar_valor_catalogo(hp)}   "
+            f"⚔️ ATK: {formatar_valor_catalogo(atk)}   "
+            f"🛡️ DEF: {formatar_valor_catalogo(defesa)}\n"
+            f"⭐ XP: {formatar_valor_catalogo(xp)}   "
+            f"💰 Gold: {formatar_valor_catalogo(gold)}\n"
+        )
+        if drops_relacionados:
+            texto += "🎁 Drops: " + ", ".join(drops_relacionados[:6])
+            if len(drops_relacionados) > 6:
+                texto += f" e mais {len(drops_relacionados) - 6}"
+        else:
+            texto += f"🎁 Drops: {drops or 'a confirmar'}"
+
+        await alvo.edit_message_text(
+            texto,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "⬅️ Voltar aos monstros",
+                    callback_data=f"atlas_t_{mapa_id}_{codigo_tipo}"
+                )],
+                [InlineKeyboardButton(
+                    "🗺️ Todos os mapas", callback_data="atlas_inicio"
+                )]
+            ])
+        )
+    finally:
+        cur.close()
+
+
+async def callback_atlas(update, context):
+    query = update.callback_query
+
+    if not membro_cadastrado(query.from_user.id):
+        await query.answer(
+            "Envie seu perfil no tópico de Presença primeiro.",
+            show_alert=True
+        )
+        return
+
+    await query.answer()
+
+    dados = query.data
+    try:
+        if dados == "atlas_inicio":
+            await mostrar_inicio_atlas(query, editar=True)
+        elif dados.startswith("atlas_m_"):
+            await mostrar_mapa_atlas(query, int(dados.split("_")[2]), editar=True)
+        elif dados.startswith("atlas_t_"):
+            _, _, mapa_id, codigo_tipo = dados.split("_")
+            await mostrar_monstros_atlas(query, int(mapa_id), codigo_tipo)
+        elif dados.startswith("atlas_x_"):
+            _, _, monstro_id, mapa_id, codigo_tipo = dados.split("_")
+            await mostrar_monstro_atlas(
+                query, int(monstro_id), int(mapa_id), codigo_tipo
+            )
+    except (ValueError, IndexError):
+        await query.edit_message_text(
+            "Não consegui abrir essa página do Atlas. Use /mapa novamente."
+        )
 
 
 async def cmd_monstro(update, context):
@@ -2539,6 +2739,14 @@ async def cmd_monstro(update, context):
 
 
 async def cmd_start(update, context):
+
+    if context.args and context.args[0] == "atlas":
+
+        if not await validar_acesso(update, context, "/mapa"):
+            return
+
+        await mostrar_inicio_atlas(update.message)
+        return
 
     if context.args and context.args[0] == "item":
 
@@ -2804,7 +3012,6 @@ async def mostrar_item(
     cur = conn.cursor()
 
     cur.execute("""
-
         SELECT *
         FROM itens_legends
         WHERE id=%s
@@ -3206,7 +3413,6 @@ async def callback_biblioteca(update, context):
 
     if dados == "cat_arqueiro_escudo":
 
-
         await query.edit_message_text(
             "🛡 ESCUDOS - ARQUEIRO",
             reply_markup=teclado_itens(
@@ -3589,6 +3795,13 @@ def main():
 
     app.add_handler(
         CallbackQueryHandler(
+            callback_atlas,
+            pattern=r"^atlas_"
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
             callback_biblioteca
         )
     )
@@ -3605,7 +3818,6 @@ def main():
     )
 
     print("4 - Iniciando polling")
-
 
     app.run_polling(
         drop_pending_updates=True,
