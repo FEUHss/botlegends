@@ -34,9 +34,26 @@ TOPICO_LOOTS = 19
 TOPICO_PILAR = 29992
 TOPICO_GIBBY = 82230
 
-# Nomes exibidos atualmente pelo bot oficial. Mantemos a grafia acentuada no
-# Atlas mesmo quando o jogo omite acentos em algumas telas.
-NOMES_MASMORRAS = {
+# Nomes levantados diretamente nos menus do bot oficial. Um mapa pode ter
+# várias masmorras; a ordem é apenas a ordem de exibição no Atlas.
+MASMORRAS_POR_MAPA = {
+    "Planície": ["Masmorra da Planície", "Covil de Zul'gor"],
+    "Floresta Sombria": ["Masmorra da Floresta"],
+    "Pântano": ["Masmorra do Pântano"],
+    "Cemitério Antigo": ["Covil do Lord", "Cripta do Cemitério"],
+    "Deserto Escaldante": ["Pirâmide do Deserto"],
+    "Oásis Perdido": ["Fenda Solar", "Templo do Oásis"],
+    "Montanhas Gélidas": [
+        "Ruínas de Azulgor",
+        "Lago de Kryos",
+        "Túneis Proibidos",
+    ],
+    "Fortaleza dos Orcs": ["Fosso de Provas", "Trono de Khar'gath"],
+}
+
+# O catálogo legado só dizia "Masmorra". Esta tabela determina em qual das
+# masmorras oficiais os registros antigos aparecem, sem duplicá-los nas demais.
+MASMORRA_DOS_MONSTROS = {
     "Planície": "Masmorra da Planície",
     "Floresta Sombria": "Masmorra da Floresta",
     "Pântano": "Masmorra do Pântano",
@@ -2409,8 +2426,22 @@ def agrupar_botoes_atlas(botoes, colunas=2):
     return [botoes[i:i + colunas] for i in range(0, len(botoes), colunas)]
 
 
-def nome_masmorra_atlas(nome_mapa):
-    return NOMES_MASMORRAS.get(nome_mapa, f"Masmorra de {nome_mapa}")
+def masmorras_do_mapa_atlas(nome_mapa):
+    return MASMORRAS_POR_MAPA.get(nome_mapa, [])
+
+
+def nome_area_atlas(nome_mapa, codigo_area):
+    if codigo_area == "c":
+        return "Caçada"
+
+    if not codigo_area.startswith("d"):
+        return None
+
+    try:
+        indice = int(codigo_area[1:])
+        return masmorras_do_mapa_atlas(nome_mapa)[indice]
+    except (ValueError, IndexError):
+        return None
 
 
 async def mostrar_inicio_atlas(alvo, editar=False):
@@ -2488,18 +2519,21 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
                 "Escolha uma área:"
             )
             linhas = []
-            if total_cacada:
+            linhas.append([InlineKeyboardButton(
+                f"⚔️ Caçada ({total_cacada})",
+                callback_data=f"atlas_t_{mapa_id}_c"
+            )])
+            masmorra_com_monstros = MASMORRA_DOS_MONSTROS.get(nome)
+            for indice, nome_masmorra in enumerate(masmorras_do_mapa_atlas(nome)):
+                quantidade = (
+                    total_masmorra
+                    if nome_masmorra == masmorra_com_monstros
+                    else 0
+                )
                 linhas.append([InlineKeyboardButton(
-                    f"⚔️ Caçada ({total_cacada})",
-                    callback_data=f"atlas_t_{mapa_id}_c"
+                    f"🗝️ {nome_masmorra} ({quantidade})",
+                    callback_data=f"atlas_t_{mapa_id}_d{indice}"
                 )])
-            if total_masmorra:
-                linhas.append([InlineKeyboardButton(
-                    f"🗝️ {nome_masmorra_atlas(nome)} ({total_masmorra})",
-                    callback_data=f"atlas_t_{mapa_id}_d"
-                )])
-            if not linhas:
-                texto += "\n\nAinda não há monstros cadastrados neste mapa."
             linhas.append([
                 InlineKeyboardButton("⬅️ Mapas", callback_data="atlas_inicio")
             ])
@@ -2513,8 +2547,7 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
         cur.close()
 
 
-async def mostrar_monstros_atlas(alvo, mapa_id, codigo_tipo):
-    tipo = "Caçada" if codigo_tipo == "c" else "Masmorra"
+async def mostrar_monstros_atlas(alvo, mapa_id, codigo_area):
     cur = conn.cursor()
     try:
         cur.execute("SELECT nome FROM catalogo_mapas WHERE id=%s", (mapa_id,))
@@ -2524,22 +2557,31 @@ async def mostrar_monstros_atlas(alvo, mapa_id, codigo_tipo):
             return
         nome_mapa = resultado[0]
 
-        cur.execute("""
-            SELECT ordem, id, nome
-            FROM catalogo_monstros
-            WHERE mapa_id=%s AND LOWER(tipo)=LOWER(%s)
-            ORDER BY ordem, id
-        """, (mapa_id, tipo))
-        monstros = cur.fetchall()
+        titulo_area = nome_area_atlas(nome_mapa, codigo_area)
+        if not titulo_area:
+            await mostrar_mapa_atlas(alvo, mapa_id, editar=True)
+            return
 
-        titulo_area = (
-            "Caçada" if codigo_tipo == "c"
-            else nome_masmorra_atlas(nome_mapa)
+        consultar_monstros = (
+            codigo_area == "c"
+            or titulo_area == MASMORRA_DOS_MONSTROS.get(nome_mapa)
         )
+        if consultar_monstros:
+            tipo = "Caçada" if codigo_area == "c" else "Masmorra"
+            cur.execute("""
+                SELECT ordem, id, nome
+                FROM catalogo_monstros
+                WHERE mapa_id=%s AND LOWER(tipo)=LOWER(%s)
+                ORDER BY ordem, id
+            """, (mapa_id, tipo))
+            monstros = cur.fetchall()
+        else:
+            monstros = []
+
         botoes = [
             InlineKeyboardButton(
                 f"{ordem}. {nome}",
-                callback_data=f"atlas_x_{monstro_id}_{mapa_id}_{codigo_tipo}"
+                callback_data=f"atlas_x_{monstro_id}_{mapa_id}_{codigo_area}"
             )
             for ordem, monstro_id, nome in monstros
         ]
@@ -2549,9 +2591,13 @@ async def mostrar_monstros_atlas(alvo, mapa_id, codigo_tipo):
                 f"⬅️ {nome_mapa}", callback_data=f"atlas_m_{mapa_id}"
             )
         ])
+        instrucao = (
+            "Escolha um monstro:"
+            if monstros
+            else "Nenhum monstro associado a esta área por enquanto."
+        )
         await alvo.edit_message_text(
-            f"👹 {titulo_area.upper()} — {nome_mapa.upper()}\n\n"
-            "Escolha um monstro:",
+            f"👹 {titulo_area.upper()} — {nome_mapa.upper()}\n\n{instrucao}",
             reply_markup=InlineKeyboardMarkup(linhas)
         )
     finally:
@@ -2559,7 +2605,7 @@ async def mostrar_monstros_atlas(alvo, mapa_id, codigo_tipo):
 
 
 async def mostrar_monstro_atlas(
-    alvo, monstro_id, mapa_id, codigo_tipo
+    alvo, monstro_id, mapa_id, codigo_area
 ):
     cur = conn.cursor()
     try:
@@ -2572,7 +2618,7 @@ async def mostrar_monstro_atlas(
         """, (monstro_id, mapa_id))
         monstro = cur.fetchone()
         if not monstro:
-            await mostrar_monstros_atlas(alvo, mapa_id, codigo_tipo)
+            await mostrar_monstros_atlas(alvo, mapa_id, codigo_area)
             return
 
         (ordem, nome, mapa, tipo, raridade, hp, atk, defesa, xp, gold,
@@ -2608,7 +2654,7 @@ async def mostrar_monstro_atlas(
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton(
                     "⬅️ Voltar aos monstros",
-                    callback_data=f"atlas_t_{mapa_id}_{codigo_tipo}"
+                    callback_data=f"atlas_t_{mapa_id}_{codigo_area}"
                 )],
                 [InlineKeyboardButton(
                     "🗺️ Todos os mapas", callback_data="atlas_inicio"
@@ -2638,12 +2684,28 @@ async def callback_atlas(update, context):
         elif dados.startswith("atlas_m_"):
             await mostrar_mapa_atlas(query, int(dados.split("_")[2]), editar=True)
         elif dados.startswith("atlas_t_"):
-            _, _, mapa_id, codigo_tipo = dados.split("_")
-            await mostrar_monstros_atlas(query, int(mapa_id), codigo_tipo)
+            _, _, mapa_id, codigo_area = dados.split("_")
+            # Compatibilidade com botões da primeira versão do Atlas.
+            if codigo_area == "d":
+                cur = conn.cursor()
+                try:
+                    cur.execute(
+                        "SELECT nome FROM catalogo_mapas WHERE id=%s",
+                        (int(mapa_id),)
+                    )
+                    mapa = cur.fetchone()
+                finally:
+                    cur.close()
+                if mapa:
+                    nome_destino = MASMORRA_DOS_MONSTROS.get(mapa[0])
+                    masmorras = masmorras_do_mapa_atlas(mapa[0])
+                    if nome_destino in masmorras:
+                        codigo_area = f"d{masmorras.index(nome_destino)}"
+            await mostrar_monstros_atlas(query, int(mapa_id), codigo_area)
         elif dados.startswith("atlas_x_"):
-            _, _, monstro_id, mapa_id, codigo_tipo = dados.split("_")
+            _, _, monstro_id, mapa_id, codigo_area = dados.split("_")
             await mostrar_monstro_atlas(
-                query, int(monstro_id), int(mapa_id), codigo_tipo
+                query, int(monstro_id), int(mapa_id), codigo_area
             )
     except (ValueError, IndexError):
         await query.edit_message_text(
