@@ -372,7 +372,2201 @@ def inicializar_banco():
             WHERE nome = %s
             ON CONFLICT (nome, mapa_id, tipo) DO NOTHING
         """, [
-            (ordem, nome, tipo, raridade, hp, atk, defesa,…14111 tokens truncated…await context.bot.get_me()
+            (ordem, nome, tipo, raridade, hp, atk, defesa, xp, gold,
+             drops, fonte, confirmado, mapa)
+            for ordem, nome, mapa, tipo, raridade, hp, atk, defesa,
+                xp, gold, drops, fonte, confirmado in monstros_iniciais
+        ])
+        conn.commit()
+        print("0 - Estrutura do banco verificada")
+    finally:
+        cur.close()
+
+inicializar_banco()
+tz = pytz.timezone("America/Sao_Paulo")
+
+def comando_permitido(msg):
+
+    if msg.chat.type == "private":
+
+        return membro_cadastrado(
+            msg.from_user.id
+        )
+
+    return (
+        msg.chat.id == GRUPO_ID
+        and msg.message_thread_id == TOPICO_PILAR
+    )
+
+
+def hoje():
+    return datetime.now(tz).date()
+
+def limpar_nome(nome):
+    nome = nome.replace("[LG]", "").strip()
+    nome = re.sub(r"^[^\wÀ-ÿ]+", "", nome).strip()
+    return nome.upper() or None
+
+def extrair_nome(texto):
+    linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
+
+    # No formato atual, o nick fica imediatamente antes de "Classe:".
+    for i, linha in enumerate(linhas):
+        if re.match(r"^Classe\s*:", linha, re.IGNORECASE) and i > 0:
+            return limpar_nome(linhas[i - 1])
+
+    # Compatibilidade com perfis sem a linha de classe.
+    ignorar = (
+        "classe:", "títulos:", "titulos:", "lv ", "xp:", "faltam:",
+        "arena", "ranking:", "histórico:", "historico:", "energia:",
+        "gold:", "tofus:", "mapa:", "renomear:", "mudar classe:"
+    )
+    for linha in linhas:
+        candidato = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+        if candidato and not candidato.casefold().startswith(ignorar):
+            if not re.search(r"\b(?:ATK|DEF|CRIT|HP)\b", candidato, re.IGNORECASE):
+                return limpar_nome(candidato)
+
+    return None
+
+def extrair_xp(texto):
+    match = re.search(r"\bXP\s*:\s*([\d.,]+)", texto, re.IGNORECASE)
+    if not match:
+        return None
+    return int(re.sub(r"\D", "", match.group(1)))
+
+def extrair_xp_restante(texto):
+    match = re.search(r"\bFaltam\s*:\s*([\d.,]+)", texto, re.IGNORECASE)
+    if not match:
+        return None
+    return int(re.sub(r"\D", "", match.group(1)))
+
+def extrair_nivel(texto):
+    match = re.search(r"\bLv\s*(\d+)", texto, re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+def extrair_status(texto):
+    dados = {}
+    bonus_atk = 0
+    bonus_def = 0
+    bonus_crit = 0
+    atk = None
+    defesa = None
+    crit = None
+
+    for linha in texto.splitlines():
+        linha = linha.strip()
+
+        # Status principais e HP podem estar todos na mesma linha.
+        if "+" not in linha:
+            atk_match = re.search(r"\bATK\s*:?\s*(\d+(?:[.,]\d+)?)", linha, re.IGNORECASE)
+            def_match = re.search(r"\bDEF\s*:?\s*(\d+(?:[.,]\d+)?)", linha, re.IGNORECASE)
+            crit_match = re.search(r"\bCRIT\s*:?\s*(\d+(?:[.,]\d+)?)", linha, re.IGNORECASE)
+
+            if atk_match:
+                atk = float(atk_match.group(1).replace(",", "."))
+            if def_match:
+                defesa = float(def_match.group(1).replace(",", "."))
+            if crit_match:
+                crit = float(crit_match.group(1).replace(",", "."))
+
+        if "+" in linha:
+            atk_match = re.search(r"\+(\d+(?:[.,]\d+)?)\s*ATK", linha, re.IGNORECASE)
+            def_match = re.search(r"\+(\d+(?:[.,]\d+)?)\s*DEF", linha, re.IGNORECASE)
+            crit_match = re.search(r"\+(\d+(?:[.,]\d+)?)\s*%?\s*CRIT", linha, re.IGNORECASE)
+
+            if atk_match:
+                bonus_atk = float(atk_match.group(1).replace(",", "."))
+            if def_match:
+                bonus_def = float(def_match.group(1).replace(",", "."))
+            if crit_match:
+                bonus_crit = float(crit_match.group(1).replace(",", "."))
+
+        hp_match = re.search(
+            r"\bHP\s*:?\s*(\d[\d.,]*)(?:\s*/\s*(\d[\d.,]*))?",
+            linha,
+            re.IGNORECASE
+        )
+        if hp_match:
+            valor_hp = hp_match.group(2) or hp_match.group(1)
+            dados["hp"] = int(re.sub(r"\D", "", valor_hp))
+
+        gold_match = re.search(r"\bGold\s*:\s*([\d.,]+)", linha, re.IGNORECASE)
+        if gold_match:
+            dados["gold"] = int(re.sub(r"\D", "", gold_match.group(1)))
+
+        tofus_match = re.search(r"\bTofus\s*:\s*([\d.,]+)", linha, re.IGNORECASE)
+        if tofus_match:
+            dados["tofus"] = int(re.sub(r"\D", "", tofus_match.group(1)))
+
+    if atk is not None:
+        dados["atk"] = max(0, atk - bonus_atk)
+    if defesa is not None:
+        dados["def"] = max(0, defesa - bonus_def)
+    if crit is not None:
+        dados["crit"] = max(0, crit - bonus_crit)
+
+    return dados
+
+def registrar_membro(tg_id, nome):
+    cur = conn.cursor()
+    try:
+        # Impede que um perfil já vinculado seja apropriado por outro ID.
+        cur.execute("""
+            SELECT telegram_id
+            FROM membros
+            WHERE UPPER(nome)=UPPER(%s) AND telegram_id<>%s
+            LIMIT 1
+            FOR UPDATE
+        """, (nome, tg_id))
+
+        if cur.fetchone():
+            conn.rollback()
+            return False
+
+        cur.execute("""
+            INSERT INTO membros (telegram_id,nome)
+            VALUES (%s,%s)
+            ON CONFLICT (telegram_id)
+            DO UPDATE SET nome=EXCLUDED.nome
+        """, (tg_id, nome))
+
+        # Mantém uma trilha de troca de nick sem apagar o vínculo anterior.
+        cur.execute("""
+            INSERT INTO membro_vinculos (telegram_id,nome)
+            VALUES (%s,%s)
+            ON CONFLICT (telegram_id,nome)
+            DO UPDATE SET ultima_vista=CURRENT_TIMESTAMP
+        """, (tg_id, nome))
+
+        # O ID do Telegram é a identidade estável. Atualiza o nick de exibição
+        # nos registros associados para rankings, presença, caçadas e Gibby.
+        for tabela in (
+            "presencas", "xp_logs", "xp_progresso", "status", "cacadas", "gibby_logs"
+        ):
+            cur.execute(
+                f"UPDATE {tabela} SET nome=%s WHERE telegram_id=%s AND nome<>%s",
+                (nome, tg_id, nome)
+            )
+
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+def salvar_presenca(tg_id,nome):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO presencas (telegram_id,nome,data) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
+        (tg_id,nome,hoje())
+    )
+    inseriu = cur.rowcount > 0
+    conn.commit()
+    return inseriu
+
+def salvar_xp(tg_id,nome,xp,nivel,xp_restante=None):
+
+    if xp is None:
+        return
+
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT xp
+            FROM xp_logs
+            WHERE telegram_id=%s
+            ORDER BY data_hora DESC
+            LIMIT 1
+        """, (tg_id,))
+
+        ultimo = cur.fetchone()
+        if not ultimo or ultimo[0] != xp:
+            cur.execute(
+                "INSERT INTO xp_logs (telegram_id,nome,xp,nivel) VALUES (%s,%s,%s,%s)",
+                (tg_id,nome,xp,nivel)
+            )
+
+        if xp_restante is not None:
+            cur.execute("""
+                SELECT xp, nivel, xp_restante
+                FROM xp_progresso
+                WHERE telegram_id=%s
+                ORDER BY data_hora DESC
+                LIMIT 1
+            """, (tg_id,))
+
+            ultimo_progresso = cur.fetchone()
+            if ultimo_progresso != (xp, nivel, xp_restante):
+                cur.execute("""
+                    INSERT INTO xp_progresso
+                    (telegram_id,nome,xp,nivel,xp_restante)
+                    VALUES (%s,%s,%s,%s,%s)
+                """, (tg_id,nome,xp,nivel,xp_restante))
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+def salvar_status(tg_id,nome,d):
+    if not d: return
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO status
+        (telegram_id,nome,atk,def,crit,hp,gold,tofus)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """,(tg_id,nome,d.get("atk"),d.get("def"),d.get("crit"),
+         d.get("hp"),d.get("gold"),d.get("tofus")))
+
+    conn.commit()
+
+def buscar_nome_por_id(tg_id):
+
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT nome FROM membros WHERE telegram_id=%s",
+        (tg_id,)
+    )
+
+    row = cur.fetchone()
+
+    return row[0] if row else None
+
+MSG_GIBBY_SUCESSO_1 = [
+    "🔨 O Gibby bateu torto, mas bateu certo. {item} alcançou +1.",
+    "🍺 Gibby jurou que sabia o que estava fazendo. E funcionou.",
+    "✨ O martelo cantou, as runas brilharam e {item} virou +1.",
+    "🛠 Depois de muito barulho e pouca técnica, sucesso.",
+    "🔥 Os espíritos da forja aprovaram a tentativa.",
+    "🏹 O Rastreador anota mais uma vitória nos livros da forja."
+]
+
+MSG_GIBBY_SUCESSO_2 = [
+    "⚡ O impossível aconteceu. {item} alcançou +2.",
+    "🍀 Alguém claramente roubou sorte hoje.",
+    "🔨 O velho Gibby tropeçou e acertou o golpe perfeito.",
+    "📜 Mais um registro glorioso para os livros da forja.",
+    "🔥 As chamas aceitaram o sacrifício.",
+    "🏆 O martelo venceu a estatística."
+]
+
+MSG_GIBBY_SUCESSO_3 = [
+    "👑 LENDA! {item} alcançou +3. Os livros da forja registrarão este feito por gerações."
+]
+
+MSG_GIBBY_FALHA = [
+    "💀 Gibby cobrou o preço. Dois {item} viraram pó.",
+    "🪦 Os espíritos da forja rejeitaram a tentativa.",
+    "🔥 O martelo venceu. Os itens perderam.",
+    "🍺 Gibby garante que da próxima vez funciona.",
+    "⚰ Mais um par de itens tombou diante da estatística.",
+    "📉 O ouro foi gasto. A tristeza foi gratuita."
+]
+
+def membro_cadastrado(tg_id):
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT 1
+        FROM membros
+        WHERE telegram_id=%s
+        """,
+        (tg_id,)
+    )
+
+    return cur.fetchone() is not None
+
+async def avisar_tentativa_acesso(
+    context,
+    user,
+    comando
+):
+
+    texto = (
+        "🚨 TENTATIVA DE ACESSO\n\n"
+        f"👤 Nome: {user.full_name}\n"
+        f"📛 Username: @{user.username if user.username else 'sem username'}\n"
+        f"🆔 ID: {user.id}\n"
+        f"⌨ Comando: {comando}"
+    )
+
+    await context.bot.send_message(
+        chat_id=5285053532,
+        text=texto
+    )
+
+async def validar_acesso(
+    update,
+    context,
+    comando
+):
+
+    if comando_permitido(
+        update.message
+    ):
+        return True
+
+    if update.message.chat.type == "private":
+
+        await avisar_tentativa_acesso(
+            context,
+            update.effective_user,
+            comando
+        )
+
+        await update.message.reply_text(
+            "⚠ Você não possui um perfil cadastrado.\n\n"
+            "Envie seu perfil no tópico de Presença da guilda e tente novamente."
+        )
+
+    return False
+
+def extrair_cacada(texto):
+
+    if "RESUMO DA CAÇADA EM DUPLA" not in texto:
+        return None
+
+    dados = {
+        "xp": 0,
+        "gold": 0,
+        "lendarios": 0,
+        "pvps": 0
+    }
+
+    xp_match = re.search(
+        r"Total recebido:\s*([\d,.]+)\s*XP|XP recebido:\s*([\d,.]+)\s*XP",
+        texto
+    )
+
+    if xp_match:
+
+        valor = xp_match.group(1) or xp_match.group(2)
+
+        dados["xp"] = int(
+            valor.replace(",", "").replace(".", "")
+        )
+
+    gold_match = re.search(
+        r"Gold recebido:\s*([\d,.]+)",
+        texto
+    )
+
+    if gold_match:
+
+        dados["gold"] = int(
+            gold_match.group(1)
+            .replace(",", "")
+            .replace(".", "")
+        )
+
+    lendarios = 0
+
+    for linha in texto.split("\n"):
+
+        linha = linha.strip()
+
+        if (
+            "Tônico" not in linha
+            and "Poção" not in linha
+            and "Chave" not in linha
+            and "XP" not in linha
+            and "Gold" not in linha
+            and linha
+        ):
+
+            if (
+                "Drops:" not in linha
+                and "Equipes eliminadas" not in linha
+            ):
+                pass
+
+    lendarios = texto.count("🟠")
+
+    if "Equipes eliminadas:" in texto:
+
+        dados["pvps"] = len(
+            re.findall(r"→", texto)
+        )
+
+    dados["lendarios"] = lendarios
+
+    return dados
+
+
+def extrair_gibby(texto):
+
+    texto = texto.strip()
+
+    # ===== SUCESSO =====
+
+    if "SUCESSO!" in texto:
+
+        match = re.search(
+            r"SUCESSO!\s*🔥?\s*\n*\s*(.+?) foi forjado",
+            texto,
+            re.DOTALL
+        )
+
+        if not match:
+            return None
+
+        item = match.group(1).strip()
+
+        nivel_match = re.search(
+            r"evoluiu para \+(\d)",
+            texto
+        )
+
+        if not nivel_match:
+            return None
+
+        nivel_destino = int(
+            nivel_match.group(1)
+        )
+
+        nivel_origem = nivel_destino - 1
+
+        itens_base = {
+            1: 2,
+            2: 4,
+            3: 8
+        }.get(nivel_destino, 0)
+
+        return {
+            "item": item,
+            "nivel_origem": nivel_origem,
+            "nivel_destino": nivel_destino,
+            "resultado": "SUCESSO",
+            "itens_base": itens_base
+        }
+
+    # ===== FALHA =====
+
+    if "FALHA CATASTRÓFICA" in texto:
+
+        match = re.search(
+            r"Ambos os (.+?) \+(\d)",
+            texto
+        )
+
+        if match:
+
+            item = match.group(1).strip()
+
+            nivel_origem = int(match.group(2))
+            nivel_destino = nivel_origem + 1
+
+        else:
+
+            match = re.search(
+                r"Ambos os (.+?) explodiram",
+                texto
+            )
+
+            if not match:
+                return None
+
+            item = match.group(1).strip()
+
+            nivel_origem = 0
+            nivel_destino = 1
+
+        itens_base = {
+            1: 2,
+            2: 4,
+            3: 8
+        }.get(nivel_destino, 0)
+
+        return {
+            "item": item,
+            "nivel_origem": nivel_origem,
+            "nivel_destino": nivel_destino,
+            "resultado": "FALHA",
+            "itens_base": itens_base
+        }
+
+    return None
+
+def salvar_cacada(tg_id, nome, dados):
+
+    if not dados:
+        return
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO cacadas
+        (
+            telegram_id,
+            nome,
+            xp,
+            gold,
+            lendarios,
+            pvps
+        )
+        VALUES (%s,%s,%s,%s,%s,%s)
+    """,
+    (
+        tg_id,
+        nome,
+        dados["xp"],
+        dados["gold"],
+        dados["lendarios"],
+        dados["pvps"]
+    ))
+
+    conn.commit()
+
+def salvar_gibby(
+    tg_id,
+    nome,
+    item,
+    nivel_origem,
+    nivel_destino,
+    resultado,
+    itens_base
+):
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO gibby_logs
+        (
+            telegram_id,
+            nome,
+            item,
+            nivel_origem,
+            nivel_destino,
+            resultado,
+            itens_base_consumidos
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
+    """,
+    (
+        tg_id,
+        nome,
+        item,
+        nivel_origem,
+        nivel_destino,
+        resultado,
+        itens_base
+    ))
+
+    conn.commit()
+
+def gerar_lista():
+    cur = conn.cursor()
+
+    cur.execute("SELECT nome FROM membros ORDER BY nome")
+    membros = [x[0] for x in cur.fetchall()]
+
+    cur.execute("SELECT nome FROM presencas WHERE data=%s ORDER BY nome",(hoje(),))
+    presentes = [x[0] for x in cur.fetchall()]
+
+    ausentes = sorted(set(membros)-set(presentes))
+
+    txt = f"📜 PRESENÇA {hoje().strftime('%d/%m')}\n\n🟢 Presentes\n"
+    txt += "\n".join(f"✅ {x}" for x in presentes) if presentes else "Ninguém"
+    txt += "\n\n🔴 Ausentes\n"
+    txt += "\n".join(f"❌ {x}" for x in ausentes) if ausentes else "Nenhum"
+    txt += f"\n\n📊 {len(presentes)}/{len(membros)} membros"
+    return txt
+
+def ranking_xp():
+    cur = conn.cursor()
+    cur.execute("""
+    SELECT DISTINCT ON (telegram_id) nome,nivel,xp
+    FROM xp_logs
+    ORDER BY telegram_id,data_hora DESC
+    """)
+    d = sorted(cur.fetchall(), key=lambda x: x[2], reverse=True)
+    txt = "🏆 RANKING XP\n\n"
+    for i,(n,l,xp) in enumerate(d,1):
+        txt += f"{i}. {n} — Lv {l} - {xp}\n"
+    return txt
+
+def ranking_status(campo, titulo):
+    cur = conn.cursor()
+
+    cur.execute(f"""
+        SELECT DISTINCT ON (telegram_id)
+               nome,
+               {campo}
+        FROM status
+        WHERE {campo} IS NOT NULL
+        ORDER BY telegram_id, data_hora DESC
+    """)
+
+    dados = cur.fetchall()
+
+    dados.sort(
+        key=lambda x: float(x[1]) if x[1] is not None else 0,
+        reverse=True
+    )
+
+    texto = f"🏆 {titulo}\n\n"
+
+    for i, (nome, valor) in enumerate(dados, 1):
+        texto += f"{i}. {nome} — {valor}\n"
+
+    return texto
+
+def ranking_xpdif():
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT telegram_id, nome, xp, data_hora
+        FROM xp_logs
+        ORDER BY telegram_id, data_hora ASC
+    """)
+
+    rows = cur.fetchall()
+
+    hoje_data = hoje()
+    dados = {}
+
+    for tg_id, nome, xp, data_hora in rows:
+
+        data_registro = data_hora.astimezone(tz).date()
+
+        if tg_id not in dados:
+            dados[tg_id] = {
+                "nome": nome,
+                "base": None,
+                "ultimo": xp,
+                "ultimo_ontem": None
+            }
+
+        dados[tg_id]["ultimo"] = xp
+
+        if data_registro < hoje_data:
+            dados[tg_id]["ultimo_ontem"] = xp
+
+        elif data_registro == hoje_data and dados[tg_id]["base"] is None:
+            dados[tg_id]["base"] = xp
+
+    resultado = []
+
+    for jogador in dados.values():
+
+        if jogador["ultimo_ontem"] is not None:
+            base = jogador["ultimo_ontem"]
+        else:
+            base = jogador["base"]
+
+        if base is None:
+            continue
+
+        ganho = jogador["ultimo"] - base
+
+        resultado.append(
+            (
+                jogador["nome"],
+                ganho
+            )
+        )
+
+    resultado.sort(
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    texto = "📊 VARIAÇÃO XP (HOJE)\n\n"
+
+    for pos, (nome, ganho) in enumerate(resultado, 1):
+
+        emoji = "📈" if ganho > 0 else "➖"
+
+        texto += f"{pos}. {nome} — {emoji} {ganho:+}\n"
+
+    return texto
+
+def formatar_numero(valor):
+    return f"{int(valor):,}".replace(",", ".")
+
+def faixa_previsao(dias):
+    if dias <= 1:
+        return "hoje ou amanhã"
+    if dias < 3:
+        return "em menos de 3 dias"
+    if dias <= 7:
+        return "entre 3 e 7 dias"
+    if dias <= 14:
+        return "entre 1 e 2 semanas"
+    return "em mais de 2 semanas"
+
+def gerar_up(tg_id):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT nome, nivel, xp, xp_restante, data_hora
+            FROM xp_progresso
+            WHERE telegram_id=%s
+            ORDER BY data_hora DESC
+            LIMIT 1
+        """, (tg_id,))
+
+        ultimo = cur.fetchone()
+        if not ultimo:
+            return (
+                "📈 EXP TRACKER\n\n"
+                "Ainda não tenho o XP restante desse personagem. "
+                "Encaminhe um perfil atualizado no tópico de presença."
+            )
+
+        nome, nivel, xp, xp_restante, data_ultimo = ultimo
+        inicio = data_ultimo - timedelta(days=7)
+
+        # Um snapshot por dia evita que vários perfis no mesmo dia distorçam
+        # a média. XP total é cumulativo, inclusive após subir de nível.
+        cur.execute("""
+            SELECT dia, xp
+            FROM (
+                SELECT DISTINCT ON (
+                    (data_hora AT TIME ZONE 'America/Sao_Paulo')::date
+                )
+                    (data_hora AT TIME ZONE 'America/Sao_Paulo')::date AS dia,
+                    xp,
+                    data_hora
+                FROM xp_logs
+                WHERE telegram_id=%s
+                  AND data_hora BETWEEN %s AND %s
+                ORDER BY
+                    (data_hora AT TIME ZONE 'America/Sao_Paulo')::date,
+                    data_hora DESC
+            ) diarios
+            ORDER BY dia
+        """, (tg_id, inicio, data_ultimo))
+
+        diarios = cur.fetchall()
+        cabecalho = (
+            f"📈 EXP TRACKER — {nome}\n\n"
+            f"⭐ Nível: {nivel}\n"
+            f"✨ XP total: {formatar_numero(xp)}\n"
+            f"🎯 Faltam: {formatar_numero(xp_restante)} XP\n"
+        )
+
+        if len(diarios) < 2:
+            return (
+                cabecalho
+                + "\n⏳ Ainda falta histórico diário para calcular o ritmo.\n"
+                + "Envie outro perfil em um próximo dia e use /up novamente."
+            )
+
+        primeira_data, primeiro_xp = diarios[0]
+        ultima_data, ultimo_xp = diarios[-1]
+        dias_observados = (ultima_data - primeira_data).days
+        ganho = ultimo_xp - primeiro_xp
+
+        if dias_observados < 1 or ganho <= 0:
+            return (
+                cabecalho
+                + "\n➖ Não houve ganho positivo suficiente no período "
+                + "para projetar a subida de nível."
+            )
+
+        media = ganho / dias_observados
+        dias_estimados = xp_restante / media if media > 0 else 0
+
+        return (
+            cabecalho
+            + f"\n📊 Ganho em {dias_observados} dia(s): "
+            + f"{formatar_numero(ganho)} XP\n"
+            + f"⚡ Média: {formatar_numero(round(media))} XP/dia\n"
+            + f"🗓 Previsão: {faixa_previsao(dias_estimados)} "
+            + f"(~{dias_estimados:.1f} dia(s))\n\n"
+            + "ℹ️ Estimativa baseada nos perfis dos últimos 7 dias."
+        )
+    finally:
+        cur.close()
+
+async def cmd_lista(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/lista"
+    ):
+        return
+
+    await update.message.reply_text(
+        gerar_lista()
+    )
+
+
+async def cmd_xp(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/xp"
+    ):
+        return
+
+    await update.message.reply_text(
+        ranking_xp()
+    )
+
+async def cmd_xpdif(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/xpdif"
+    ):
+        return
+
+    await update.message.reply_text(
+        ranking_xpdif()
+    )
+
+async def cmd_up(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/up"
+    ):
+        return
+
+    await update.message.reply_text(
+        gerar_up(update.effective_user.id)
+    )
+
+def mensagem_encaminhada_pelo_teletofus(msg):
+    origem = getattr(msg, "forward_origin", None)
+    usuario_origem = getattr(origem, "sender_user", None)
+    if usuario_origem:
+        return usuario_origem.id == TELETOFUS_BOT_ID
+
+    # Compatibilidade com versões anteriores da API do Telegram.
+    usuario_origem = getattr(msg, "forward_from", None)
+    return bool(usuario_origem and usuario_origem.id == TELETOFUS_BOT_ID)
+
+
+def chave_relacao_drop(item_id, monstro_id, mapa_id, forma_obtencao):
+    forma = normalizar(forma_obtencao or "")
+    return f"{item_id}:{monstro_id or 0}:{mapa_id or 0}:{forma}"
+
+
+def resolver_monstro_catalogo(cur, nome_detectado, mapa_id=None):
+    if not nome_detectado:
+        return None
+
+    cur.execute("""
+        SELECT cm.id, cm.nome, cm.mapa_id
+        FROM catalogo_monstros cm
+        ORDER BY cm.ordem, cm.id
+    """)
+    candidatos = [
+        row for row in cur.fetchall()
+        if normalizar(row[1]) == normalizar(nome_detectado)
+    ]
+
+    if mapa_id:
+        candidatos_mapa = [row for row in candidatos if row[2] == mapa_id]
+        if len(candidatos_mapa) == 1:
+            return candidatos_mapa[0]
+
+    if len(candidatos) == 1:
+        return candidatos[0]
+    return None
+
+
+async def processar_loot_para_revisao(msg, context):
+    """Cria propostas silenciosas e as envia apenas ao revisor configurado."""
+    if not mensagem_encaminhada_pelo_teletofus(msg):
+        return
+
+    texto = msg.text or msg.caption
+    if not texto:
+        return
+
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, nome FROM itens_legends ORDER BY LENGTH(nome) DESC")
+        itens = cur.fetchall()
+        cur.execute("SELECT id, nome FROM catalogo_mapas ORDER BY ordem, id")
+        mapas = cur.fetchall()
+
+        propostas = analisar_texto_loot(texto, itens, mapas)
+        for proposta in propostas:
+            monstro = resolver_monstro_catalogo(
+                cur,
+                proposta["monstro_nome"],
+                proposta["mapa_id"],
+            )
+            monstro_id = monstro[0] if monstro else None
+            mapa_id = proposta["mapa_id"]
+            mapa_nome = proposta["mapa_nome"]
+
+            # Quando o monstro é inequívoco, seu mapa cadastrado é a fonte
+            # mais segura para completar a proposta.
+            if monstro and not mapa_id:
+                mapa_id = monstro[2]
+                if mapa_id:
+                    cur.execute("SELECT nome FROM catalogo_mapas WHERE id=%s", (mapa_id,))
+                    row_mapa = cur.fetchone()
+                    mapa_nome = row_mapa[0] if row_mapa else None
+
+            relacao_chave = chave_relacao_drop(
+                proposta["item_id"],
+                monstro_id,
+                mapa_id,
+                proposta["forma_obtencao"],
+            )
+
+            cur.execute(
+                "SELECT 1 FROM item_drop_relacoes WHERE chave_unica=%s AND confirmado=TRUE",
+                (relacao_chave,),
+            )
+            if cur.fetchone():
+                continue
+
+            cur.execute(
+                "SELECT 1 FROM loot_evidencias WHERE relacao_chave=%s AND status='pendente'",
+                (relacao_chave,),
+            )
+            if cur.fetchone():
+                continue
+
+            evidencia_chave = (
+                f"{msg.chat.id}:{msg.message_id}:{proposta['item_id']}:"
+                f"{monstro_id or 0}:{mapa_id or 0}:"
+                f"{normalizar(proposta['forma_obtencao'] or '')}"
+            )
+            cur.execute("""
+                INSERT INTO loot_evidencias
+                    (chave_unica, relacao_chave, chat_id, message_id,
+                     remetente_id, item_id, item_nome_detectado, monstro_id,
+                     monstro_nome_detectado, mapa_id, forma_obtencao,
+                     texto_original)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (chave_unica) DO NOTHING
+                RETURNING id
+            """, (
+                evidencia_chave,
+                relacao_chave,
+                msg.chat.id,
+                msg.message_id,
+                msg.from_user.id if msg.from_user else None,
+                proposta["item_id"],
+                proposta["item_nome"],
+                monstro_id,
+                proposta["monstro_nome"],
+                mapa_id,
+                proposta["forma_obtencao"],
+                texto,
+            ))
+            row = cur.fetchone()
+            if not row:
+                continue
+
+            evidencia_id = row[0]
+            conn.commit()
+
+            monstro_texto = proposta["monstro_nome"] or "não identificado"
+            if proposta["monstro_nome"] and not monstro_id:
+                monstro_texto += " (não cadastrado/ambíguo)"
+
+            teclado = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "✅ SIM",
+                    callback_data=f"loot_sim_{evidencia_id}",
+                ),
+                InlineKeyboardButton(
+                    "❌ NÃO",
+                    callback_data=f"loot_nao_{evidencia_id}",
+                ),
+            ]])
+            texto_revisao = (
+                "🔎 PROPOSTA DE LINKAGEM\n\n"
+                f"🎁 Item: {proposta['item_nome']}\n"
+                f"👹 Monstro: {monstro_texto}\n"
+                f"🗺️ Mapa: {mapa_nome or 'não identificado'}\n"
+                f"📍 Obtenção: {proposta['forma_obtencao'] or 'não identificada'}\n\n"
+                "Deseja adicionar esta linkagem ao banco?"
+            )
+
+            try:
+                await context.bot.send_message(
+                    chat_id=LOOT_REVIEWER_ID,
+                    text=texto_revisao,
+                    reply_markup=teclado,
+                )
+            except Exception as erro:
+                cur.execute("""
+                    UPDATE loot_evidencias
+                    SET status='erro_notificacao'
+                    WHERE id=%s AND status='pendente'
+                """, (evidencia_id,))
+                conn.commit()
+                print(f"Erro ao enviar revisão de loot {evidencia_id}: {erro}")
+
+    except Exception as erro:
+        conn.rollback()
+        print(f"Erro ao analisar LOOTS: {erro}")
+    finally:
+        cur.close()
+
+
+async def callback_revisao_loot(update, context):
+    query = update.callback_query
+    if not query:
+        return
+
+    if update.effective_user.id != LOOT_REVIEWER_ID:
+        await query.answer("Somente o revisor pode decidir esta proposta.", show_alert=True)
+        return
+
+    match = re.fullmatch(r"loot_(sim|nao)_(\d+)", query.data or "")
+    if not match:
+        return
+
+    await query.answer()
+    decisao, evidencia_id = match.group(1), int(match.group(2))
+    cur = conn.cursor()
+    decisao_concluida = False
+    try:
+        cur.execute("""
+            SELECT relacao_chave, item_id, monstro_id, mapa_id,
+                   forma_obtencao, status
+            FROM loot_evidencias
+            WHERE id=%s
+            FOR UPDATE
+        """, (evidencia_id,))
+        evidencia = cur.fetchone()
+
+        if not evidencia:
+            conn.rollback()
+            await query.edit_message_text("⚠️ Esta proposta não existe mais.")
+            return
+
+        relacao_chave, item_id, monstro_id, mapa_id, forma, status = evidencia
+        if status != "pendente":
+            conn.rollback()
+            await query.edit_message_text(
+                f"Esta proposta já foi decidida: {status}."
+            )
+            return
+
+        if decisao == "sim":
+            cur.execute("""
+                INSERT INTO item_drop_relacoes
+                    (chave_unica, item_id, monstro_id, mapa_id,
+                     forma_obtencao, primeira_evidencia_id,
+                     ultima_evidencia_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (chave_unica) DO UPDATE SET
+                    ultima_evidencia_id=EXCLUDED.ultima_evidencia_id,
+                    ultima_observacao=CURRENT_TIMESTAMP,
+                    quantidade_observacoes=
+                        item_drop_relacoes.quantidade_observacoes + 1,
+                    confirmado=TRUE
+            """, (
+                relacao_chave,
+                item_id,
+                monstro_id,
+                mapa_id,
+                forma,
+                evidencia_id,
+                evidencia_id,
+            ))
+            novo_status = "aprovado"
+        else:
+            novo_status = "rejeitado"
+
+        cur.execute("""
+            UPDATE loot_evidencias
+            SET status=%s, revisor_id=%s, decidido_em=CURRENT_TIMESTAMP
+            WHERE id=%s
+        """, (novo_status, update.effective_user.id, evidencia_id))
+        conn.commit()
+        decisao_concluida = True
+
+        texto_original = query.message.text or "Proposta de linkagem"
+        texto_original = re.sub(
+            r"\n\nDeseja adicionar esta linkagem ao banco\?$",
+            "",
+            texto_original,
+        )
+        if decisao == "sim":
+            resultado = "\n\n✅ Aprovado e vinculado ao banco."
+        else:
+            resultado = "\n\n❌ Rejeitado. Nenhuma linkagem foi adicionada."
+        await query.edit_message_text(texto_original + resultado)
+
+    except Exception as erro:
+        print(f"Erro ao decidir loot {evidencia_id}: {erro}")
+        if not decisao_concluida:
+            conn.rollback()
+            await query.edit_message_text(
+                "⚠️ Não consegui concluir esta decisão. "
+                "A proposta continua pendente."
+            )
+    finally:
+        cur.close()
+
+
+async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    msg = update.message
+
+    if not msg:
+        return
+
+    texto = msg.text or msg.caption
+
+    if not texto:
+        return
+
+    # =========================
+    # CAÇADA EM DUPLA
+    # =========================
+
+    eh_privado = msg.chat.type == "private"
+
+    eh_loot = (
+        msg.chat.id == GRUPO_ID
+        and msg.message_thread_id == TOPICO_LOOTS
+    )
+
+    if eh_loot:
+        await processar_loot_para_revisao(msg, context)
+
+    if eh_privado or eh_loot:
+
+        dados_cacada = extrair_cacada(texto)
+
+        if dados_cacada:
+
+            tg_id = msg.from_user.id
+
+            nome = buscar_nome_por_id(tg_id)
+
+            if not nome:
+
+                await msg.reply_text(
+                    "⚠ Você ainda não possui perfil cadastrado."
+                )
+
+                return
+
+            salvar_cacada(
+                tg_id,
+                nome,
+                dados_cacada
+            )
+
+            await msg.reply_text(
+                f"🏹 Boa {nome}! Dados da caçada salvos."
+            )
+
+            return
+
+    # =========================
+    # FORJA DO GIBBY
+    # =========================
+
+    eh_gibby = (
+        msg.chat.id == GRUPO_ID
+        and msg.message_thread_id == TOPICO_GIBBY
+    )
+
+    if eh_privado or eh_gibby:
+
+        dados_gibby = extrair_gibby(texto)
+
+        if dados_gibby:
+
+            tg_id = msg.from_user.id
+
+            nome = buscar_nome_por_id(tg_id)
+
+            if not nome:
+
+                await msg.reply_text(
+                    "⚠ Você ainda não possui perfil cadastrado."
+                )
+
+                return
+
+            salvar_gibby(
+                tg_id,
+
+                nome,
+                dados_gibby["item"],
+                dados_gibby["nivel_origem"],
+                dados_gibby["nivel_destino"],
+                dados_gibby["resultado"],
+                dados_gibby["itens_base"]
+            )
+
+            if dados_gibby["resultado"] == "SUCESSO":
+
+                if dados_gibby["nivel_destino"] == 1:
+
+                    resposta = random.choice(
+                        MSG_GIBBY_SUCESSO_1
+                    )
+
+                elif dados_gibby["nivel_destino"] == 2:
+
+                    resposta = random.choice(
+                        MSG_GIBBY_SUCESSO_2
+                    )
+
+                else:
+
+                    resposta = random.choice(
+                        MSG_GIBBY_SUCESSO_3
+                    )
+
+            else:
+
+                resposta = random.choice(
+                    MSG_GIBBY_FALHA
+                )
+
+            await msg.reply_text(
+                resposta.format(
+                    item=dados_gibby["item"]
+                )
+            )
+
+            return
+
+    # =========================
+    # PRESENÇA
+    # =========================
+
+    if msg.chat.id != GRUPO_ID:
+        return
+
+    if msg.message_thread_id != TOPICO_PRESENCA:
+        return
+
+    # Só perfis autênticos encaminhados pelo bot do jogo podem gravar dados.
+    # Mensagens comuns, textos copiados e imagens sem o formato completo são ignorados.
+    if not msg.photo or not msg.caption:
+        return
+
+    eh_encaminhada = any((
+        getattr(msg, "forward_origin", None),
+        getattr(msg, "forward_date", None),
+        getattr(msg, "forward_from", None),
+        getattr(msg, "forward_from_chat", None),
+        getattr(msg, "forward_sender_name", None),
+    ))
+
+    if not eh_encaminhada:
+        return
+
+    marcadores_obrigatorios = (
+        r"^Classe\s*:",
+        r"\bLv\s*\d+",
+        r"\bXP\s*:\s*[\d.,]+",
+        r"\bATK\s*:?\s*\d+",
+        r"\bDEF\s*:?\s*\d+",
+        r"\bCRIT\s*:?\s*\d+",
+        r"\bHP\s*:?\s*\d+",
+        r"\bGold\s*:\s*[\d.,]+",
+        r"\bTofus\s*:\s*[\d.,]+",
+    )
+
+    if not all(
+        re.search(marcador, texto, re.IGNORECASE | re.MULTILINE)
+        for marcador in marcadores_obrigatorios
+    ):
+        return
+
+    nome = extrair_nome(texto)
+    xp = extrair_xp(texto)
+    xp_restante = extrair_xp_restante(texto)
+    nivel = extrair_nivel(texto)
+    status = extrair_status(texto)
+
+    campos_status = {"atk", "def", "crit", "hp", "gold", "tofus"}
+    if (
+        not nome
+        or xp is None
+        or nivel is None
+        or not campos_status.issubset(status)
+    ):
+        return
+
+    tg_id = msg.from_user.id
+    if not registrar_membro(tg_id, nome):
+        await msg.reply_text(
+            "⚠ Este personagem já está vinculado a outra conta do Telegram. "
+            "Os dados não foram alterados. Procure um administrador para revisar o vínculo."
+        )
+        return
+
+    novo = salvar_presenca(
+        tg_id,
+        nome
+    )
+
+    salvar_xp(
+        tg_id,
+        nome,
+        xp,
+        nivel,
+        xp_restante
+    )
+
+    salvar_status(
+        tg_id,
+        nome,
+        status
+    )
+
+    if novo:
+        await msg.reply_text(
+            f"✅ Primeiro perfil do dia registrado {nome}"
+        )
+    else:
+        await msg.reply_text(
+            f"{nome} Dados do dia atualizados"
+        )
+
+async def cmd_cacada(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/cacada"
+    ):
+        return
+
+    tg_id = update.effective_user.id
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            COALESCE(SUM(xp),0),
+            COALESCE(SUM(gold),0),
+            COALESCE(SUM(lendarios),0),
+            COALESCE(SUM(pvps),0)
+        FROM cacadas
+        WHERE telegram_id=%s
+    """,(tg_id,))
+
+    xp,gold,lend,pvp = cur.fetchone()
+
+    nome = buscar_nome_por_id(tg_id)
+
+    texto = (
+        f"🏹 RESUMO DE CAÇADA\n\n"
+        f"👤 {nome}\n\n"
+        f"📦 XP acumulado: {xp:,}\n"
+        f"💰 Gold acumulado: {gold:,}\n"
+        f"🟠 Lendários: {lend}\n"
+        f"⚔ PvPs vencidos: {pvp}"
+    )
+
+    await update.message.reply_text(texto)
+
+async def cmd_pvp(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/pvp"
+    ):
+        return
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            nome,
+            SUM(pvps)
+        FROM cacadas
+        GROUP BY nome
+        HAVING SUM(pvps) > 0
+        ORDER BY SUM(pvps) DESC
+        LIMIT 20
+    """)
+
+    rows = cur.fetchall()
+
+    texto = "⚔ RANKING DE CAÇADORES\n\n"
+
+    for i,(nome,pvps) in enumerate(rows,1):
+
+        texto += (
+            f"{i}. {nome} — {pvps} PvPs\n"
+        )
+
+    await update.message.reply_text(texto)
+
+async def mostrar_item_gibby(
+    update,
+    tg_id,
+    item
+):
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            nivel_destino,
+            resultado
+        FROM gibby_logs
+        WHERE telegram_id=%s
+        AND item=%s
+    """,
+    (
+        tg_id,
+        item
+    ))
+
+    rows = cur.fetchall()
+
+    usados = len(rows)
+
+    itens_base = 0
+
+    s1=f1=s2=f2=s3=f3=0
+
+    for nivel, resultado in rows:
+
+        if nivel == 1:
+
+            itens_base += 2
+
+            if resultado == "SUCESSO":
+                s1 += 1
+            else:
+                f1 += 1
+
+        elif nivel == 2:
+
+            itens_base += 4
+
+            if resultado == "SUCESSO":
+                s2 += 1
+            else:
+                f2 += 1
+
+        elif nivel == 3:
+
+            itens_base += 8
+
+            if resultado == "SUCESSO":
+                s3 += 1
+            else:
+                f3 += 1
+
+    def pct(s,f):
+
+        total = s + f
+
+        if total == 0:
+            return 0
+
+        return round(
+            s * 100 / total,
+            1
+        )
+
+    total_s = s1+s2+s3
+    total_f = f1+f2+f3
+
+    geral = pct(
+        total_s,
+        total_f
+    )
+
+    nome = buscar_nome_por_id(tg_id)
+
+    texto = (
+        f"👤 {nome}\n\n"
+        f"📿 {item}\n\n"
+        f"🔨 Martelos usados: {usados}\n"
+        f"📦 Itens base consumidos: {itens_base}\n\n"
+        f"⭐ +1\n"
+        f"✅ {s1} sucessos\n"
+        f"❌ {f1} falhas\n"
+        f"🎯 {pct(s1,f1)}%\n\n"
+        f"⭐⭐ +2\n"
+        f"✅ {s2} sucessos\n"
+        f"❌ {f2} falhas\n"
+        f"🎯 {pct(s2,f2)}%\n\n"
+        f"⭐⭐⭐ +3\n"
+        f"✅ {s3} sucessos\n"
+        f"❌ {f3} falhas\n"
+        f"🎯 {pct(s3,f3)}%\n\n"
+        f"🏆 Taxa geral\n"
+        f"🎯 {geral}%"
+    )
+
+    await update.message.reply_text(texto)
+
+async def cmd_gibby(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/gibby"
+    ):
+        return
+
+    tg_id = update.effective_user.id
+
+    # CONSULTA DE ITEM
+
+    if context.args:
+
+        try:
+            numero = int(context.args[0])
+
+        except:
+
+            await update.message.reply_text(
+                "Use /gibby <número>"
+            )
+
+            return
+
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT DISTINCT item
+            FROM gibby_logs
+            WHERE telegram_id=%s
+            ORDER BY item
+        """,(tg_id,))
+
+        itens = [x[0] for x in cur.fetchall()]
+
+        if numero < 1 or numero > len(itens):
+
+            await update.message.reply_text(
+                "❌ Item não encontrado."
+            )
+
+            return
+
+        item = itens[numero - 1]
+
+        await mostrar_item_gibby(
+            update,
+            tg_id,
+            item
+        )
+
+        return
+
+    cur = conn.cursor()
+
+    # martelos usados
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM gibby_logs
+        WHERE telegram_id=%s
+    """,(tg_id,))
+
+    martelos = cur.fetchone()[0]
+
+    # itens base
+    cur.execute("""
+        SELECT COALESCE(
+            SUM(itens_base_consumidos),
+            0
+        )
+        FROM gibby_logs
+        WHERE telegram_id=%s
+    """,(tg_id,))
+
+    itens_base = cur.fetchone()[0]
+
+    # taxa geral
+    cur.execute("""
+        SELECT
+            COUNT(*),
+            SUM(
+                CASE
+                    WHEN resultado='SUCESSO'
+                    THEN 1
+                    ELSE 0
+                END
+
+            )
+        FROM gibby_logs
+        WHERE telegram_id=%s
+    """,(tg_id,))
+
+    total, sucessos = cur.fetchone()
+
+    sucessos = sucessos or 0
+
+    taxa_geral = (
+        sucessos * 100 / total
+        if total
+        else 0
+    )
+
+    # itens registrados
+    cur.execute("""
+        SELECT DISTINCT item
+        FROM gibby_logs
+        WHERE telegram_id=%s
+        ORDER BY item
+    """,(tg_id,))
+
+    itens = [x[0] for x in cur.fetchall()]
+
+    nome = buscar_nome_por_id(tg_id)
+
+    texto = (
+        f"🔨 LIVRO DA FORJA DO GIBBY\n\n"
+        f"👤 {nome}\n\n"
+        f"🔨 Martelos usados: {martelos}\n\n"
+        f"📦 Itens base consumidos: {itens_base}\n\n"
+    )
+
+    for nivel in [1,2,3]:
+
+        cur.execute("""
+            SELECT
+                COUNT(*),
+                SUM(
+                    CASE
+                        WHEN resultado='SUCESSO'
+                        THEN 1
+                        ELSE 0
+                    END
+                )
+            FROM gibby_logs
+            WHERE telegram_id=%s
+            AND nivel_destino=%s
+        """,(tg_id,nivel))
+
+        total_nivel, sucesso_nivel = cur.fetchone()
+
+        sucesso_nivel = sucesso_nivel or 0
+
+        taxa = (
+            sucesso_nivel * 100 / total_nivel
+            if total_nivel
+            else 0
+        )
+
+        estrelas = "⭐" * nivel
+
+        texto += (
+            f"{estrelas} - 🎯 {taxa:.1f}%\n\n"
+        )
+
+    texto += (
+        f"🏆 Taxa geral\n"
+        f"🎯 {taxa_geral:.1f}%\n\n"
+        f"📜 ITENS REGISTRADOS\n\n"
+    )
+
+    for i,item in enumerate(itens,1):
+
+        texto += f"{i}. {item}\n"
+
+    texto += (
+        "\nℹ️ Use /gibby <número> "
+        "para consultar os detalhes de um item.\n"
+        "Exemplo: /gibby 1"
+    )
+
+    await update.message.reply_text(texto)
+
+async def cmd_gibbyazar(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/gibbyazar"
+    ):
+        return
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            nome,
+            COUNT(*) AS martelos,
+            SUM(
+                CASE
+                    WHEN resultado='SUCESSO'
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS sucessos
+        FROM gibby_logs
+        GROUP BY nome
+        HAVING COUNT(*) >= 10
+    """)
+
+    rows = cur.fetchall()
+
+    ranking = []
+
+    for nome, martelos, sucessos in rows:
+
+        sucessos = sucessos or 0
+
+        taxa = (
+            sucessos * 100 / martelos
+        )
+
+        ranking.append(
+            (
+                taxa,
+                nome,
+                martelos
+            )
+        )
+
+    ranking.sort(key=lambda x: x[0])
+
+    texto = (
+        "💀 AMALDIÇOADOS PELO GOBLIN GIBBY\n\n"
+    )
+
+    if not ranking:
+
+        texto += (
+            "Ainda não há registros suficientes."
+        )
+
+    else:
+
+        for pos, (taxa, nome, martelos) in enumerate(ranking[:10], 1):
+
+            texto += (
+                f"{pos}. {nome}\n"
+                f"🎯 {taxa:.1f}% de sucesso\n"
+                f"🔨 {martelos} martelos\n\n"
+            )
+
+        texto += (
+            "🍺 O Gibby agradece "
+            "as contribuições para a ciência."
+        )
+
+    await update.message.reply_text(texto)
+
+async def cmd_gibbygeral(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/gibbygeral"
+    ):
+        return
+
+    cur = conn.cursor()
+
+    # Ferreiros registrados
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT telegram_id)
+        FROM gibby_logs
+    """)
+
+    ferreiros = cur.fetchone()[0]
+
+    # Martelos utilizados
+
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM gibby_logs
+    """)
+
+    martelos = cur.fetchone()[0]
+
+    # Itens base consumidos
+
+    cur.execute("""
+        SELECT COALESCE(
+            SUM(itens_base_consumidos),
+            0
+        )
+        FROM gibby_logs
+    """)
+
+    itens_base = cur.fetchone()[0]
+
+    # +3 criados
+
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM gibby_logs
+        WHERE resultado='SUCESSO'
+        AND nivel_destino=3
+    """)
+
+    mais3 = cur.fetchone()[0]
+
+    # Contadores
+
+    dados = {}
+
+    for nivel in [1,2,3]:
+
+        cur.execute("""
+            SELECT
+                SUM(
+                    CASE
+                        WHEN resultado='SUCESSO'
+                        THEN 1
+                        ELSE 0
+                    END
+                ),
+                SUM(
+                    CASE
+                        WHEN resultado='FALHA'
+                        THEN 1
+                        ELSE 0
+                    END
+                )
+            FROM gibby_logs
+            WHERE nivel_destino=%s
+        """,(nivel,))
+
+        sucesso, falha = cur.fetchone()
+
+        sucesso = sucesso or 0
+        falha = falha or 0
+
+        dados[nivel] = (
+            sucesso,
+            falha
+        )
+
+    total_sucesso = (
+        dados[1][0]
+        + dados[2][0]
+        + dados[3][0]
+    )
+
+    total_falha = (
+        dados[1][1]
+        + dados[2][1]
+        + dados[3][1]
+    )
+
+    total = total_sucesso + total_falha
+
+    taxa_geral = (
+        total_sucesso * 100 / total
+        if total
+        else 0
+    )
+
+    itens_destruidos = (
+        itens_base
+        - (
+            dados[1][0] * 1
+            + dados[2][0] * 2
+            + dados[3][0] * 4
+        )
+    )
+
+    texto = (
+        f"🔨 GRANDES LIVROS DA FORJA DO GIBBY\n\n"
+        f"📊 Dados gerais da Legends\n\n"
+        f"👥 Ferreiros registrados: {ferreiros}\n\n"
+        f"🔨 Martelos utilizados: {martelos}\n\n"
+        f"📦 Itens base consumidos: {itens_base}\n\n"
+        f"💀 Itens destruídos: {itens_destruidos}\n\n"
+        f"👑 Itens +3 criados: {mais3}\n\n"
+        f"━━━━━━━━━━━━\n\n"
+        f"⭐ +1\n"
+        f"✅ {dados[1][0]}\n"
+        f"❌ {dados[1][1]}\n"
+        f"🎯 {(dados[1][0]*100/(dados[1][0]+dados[1][1])) if (dados[1][0]+dados[1][1]) else 0:.1f}%\n\n"
+        f"⭐⭐ +2\n"
+        f"✅ {dados[2][0]}\n"
+        f"❌ {dados[2][1]}\n"
+        f"🎯 {(dados[2][0]*100/(dados[2][0]+dados[2][1])) if (dados[2][0]+dados[2][1]) else 0:.1f}%\n\n"
+        f"⭐⭐⭐ +3\n"
+        f"✅ {dados[3][0]}\n"
+        f"❌ {dados[3][1]}\n"
+        f"🎯 {(dados[3][0]*100/(dados[3][0]+dados[3][1])) if (dados[3][0]+dados[3][1]) else 0:.1f}%\n\n"
+        f"━━━━━━━━━━━━\n\n"
+        f"🏆 Taxa geral\n"
+        f"🎯 {taxa_geral:.1f}%\n\n"
+        f"📜 Os livros da forja continuam crescendo a cada martelo utilizado."
+    )
+
+    await update.message.reply_text(texto)
+
+async def enviar_em_partes(update, texto, limite=3800):
+
+    parte = ""
+
+    for linha in texto.splitlines():
+        candidato = f"{parte}\n{linha}" if parte else linha
+
+        if len(candidato) > limite and parte:
+            await update.message.reply_text(parte)
+            parte = linha
+        else:
+            parte = candidato
+
+    if parte:
+        await update.message.reply_text(parte)
+
+
+def argumento_numerico(context):
+
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        return None
+
+    numero = int(context.args[0])
+    return numero if numero > 0 else None
+
+
+def formatar_valor_catalogo(valor):
+
+    if valor is None:
+        return "a confirmar"
+
+    if hasattr(valor, "to_integral_value") and valor == valor.to_integral_value():
+        return str(int(valor))
+
+    return str(valor)
+
+
+async def cmd_mapa(update, context):
+
+    # O catálogo fica silencioso nos grupos durante a fase de testes.
+    if update.effective_chat.type != "private":
+        return
+
+    if not await validar_acesso(update, context, "/mapa"):
+        return
+
+    numero = argumento_numerico(context) if context.args else None
+
+    if context.args and numero is None:
+        await update.message.reply_text(
+            "Use /mapa para listar ou /mapa NÚMERO para consultar."
+        )
+        return
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT id, nome, nivel_minimo
+            FROM catalogo_mapas
+            ORDER BY ordem, id
+        """)
+        mapas = cur.fetchall()
+
+        if not numero:
+            linhas = ["🗺️ MAPAS DO TELETOFUS", ""]
+
+            for indice, mapa in enumerate(mapas, start=1):
+                nivel = f"Lv {mapa[2]}" if mapa[2] is not None else "nível a confirmar"
+                linhas.append(f"{indice}. {mapa[1]} — {nivel}")
+
+            linhas.extend(["", "Consulte os detalhes com /mapa número."])
+            await enviar_em_partes(update, "\n".join(linhas))
+            return
+
+        if numero > len(mapas):
+            await update.message.reply_text(
+                f"Mapa inexistente. Escolha um número entre 1 e {len(mapas)}."
+            )
+            return
+
+        mapa_id, nome, nivel = mapas[numero - 1][:3]
+
+        cur.execute("""
+            SELECT numero, nome, tipo
+            FROM (
+                SELECT ROW_NUMBER() OVER (ORDER BY ordem, id) AS numero,
+                       nome, tipo, mapa_id
+                FROM catalogo_monstros
+            ) catalogo_numerado
+            WHERE mapa_id=%s
+            ORDER BY numero
+        """, (mapa_id,))
+
+        monstros = cur.fetchall()
+
+        cur.execute("""
+            SELECT COUNT(DISTINCT item_id)
+            FROM (
+                SELECT id AS item_id
+                FROM itens_legends
+                WHERE mapa=%s
+
+                UNION
+
+                SELECT rel.item_id
+                FROM item_drop_relacoes rel
+                LEFT JOIN catalogo_monstros cm ON cm.id=rel.monstro_id
+                WHERE rel.confirmado=TRUE
+                  AND (rel.mapa_id=%s OR cm.mapa_id=%s)
+            ) itens_do_mapa
+        """, (nome, mapa_id, mapa_id))
+        total_itens = cur.fetchone()[0]
+
+        linhas = [
+            f"🗺️ MAPA {numero} — {nome}",
+            "",
+            f"⭐ Nível mínimo: {formatar_valor_catalogo(nivel)}",
+            "📚 Fonte: Wikia oficial",
+        ]
+
+        linhas.extend(["", f"👹 Monstros cadastrados: {len(monstros)}"])
+        linhas.extend(
+            f"• {numero}. {monstro} ({tipo})"
+            for numero, monstro, tipo in monstros
+        )
+
+        linhas.extend(["", f"🎁 Itens associados: {total_itens}"])
+
+        await enviar_em_partes(update, "\n".join(linhas))
+
+    except Exception as erro:
+        conn.rollback()
+        print(f"Erro catálogo de mapas: {erro}")
+        await update.message.reply_text(
+            "Não consegui consultar os mapas agora. Tente novamente em instantes."
+        )
+    finally:
+        cur.close()
+
+
+async def cmd_monstro(update, context):
+
+    # O bestiário fica silencioso nos grupos durante a fase de testes.
+    if update.effective_chat.type != "private":
+        return
+
+    if not await validar_acesso(update, context, "/monstro"):
+        return
+
+    numero = argumento_numerico(context) if context.args else None
+
+    if context.args and numero is None:
+        await update.message.reply_text(
+            "Use /monstro para listar ou /monstro NÚMERO para consultar."
+        )
+        return
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT cm.id, cm.nome, mp.nome, cm.tipo, cm.raridade, cm.hp,
+                   cm.atk, cm.defesa, cm.xp, cm.gold, cm.drops
+            FROM catalogo_monstros cm
+            LEFT JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
+            ORDER BY cm.ordem, cm.id
+        """)
+        monstros = cur.fetchall()
+
+        if not numero:
+            linhas = ["👹 BESTIÁRIO DO TELETOFUS", ""]
+
+            for indice, monstro in enumerate(monstros, start=1):
+                linhas.append(f"{indice}. {monstro[1]} — {monstro[2] or 'mapa a confirmar'}")
+
+            linhas.extend(["", "Consulte os detalhes com /monstro número."])
+            await enviar_em_partes(update, "\n".join(linhas))
+            return
+
+        if numero > len(monstros):
+            await update.message.reply_text(
+                f"Monstro inexistente. Escolha um número entre 1 e {len(monstros)}."
+            )
+            return
+
+        (monstro_id, nome, mapa, tipo, raridade, hp, atk, defesa, xp, gold,
+         drops) = monstros[numero - 1]
+
+        cur.execute("""
+            SELECT il.nome
+            FROM item_drop_relacoes rel
+            JOIN itens_legends il ON il.id=rel.item_id
+            WHERE rel.monstro_id=%s AND rel.confirmado=TRUE
+            ORDER BY il.nome
+        """, (monstro_id,))
+        drops_relacionados = [row[0] for row in cur.fetchall()]
+
+        linhas = [
+            f"👹 MONSTRO {numero} — {nome}",
+            "",
+            f"🗺️ Mapa: {mapa or 'a confirmar'}   🏷️ Tipo: {tipo or 'a confirmar'}   💠 Raridade: {raridade or 'a confirmar'}",
+            f"❤️ HP: {formatar_valor_catalogo(hp)}   ⚔️ ATK: {formatar_valor_catalogo(atk)}   🛡️ DEF: {formatar_valor_catalogo(defesa)}",
+            f"⭐ XP: {formatar_valor_catalogo(xp)}   💰 Gold: {formatar_valor_catalogo(gold)}",
+        ]
+
+        if drops_relacionados:
+            linhas.append(f"🎁 Drops conhecidos: {len(drops_relacionados)}")
+            linhas.extend(f"• {item}" for item in drops_relacionados[:8])
+            if len(drops_relacionados) > 8:
+                linhas.append(f"• e mais {len(drops_relacionados) - 8} item(ns)")
+        else:
+            linhas.append(f"🎁 Drops: {drops or 'a confirmar'}")
+
+        linhas.extend(["", "📚 Fonte: Wikia oficial"])
+
+        await update.message.reply_text("\n".join(linhas))
+
+    except Exception as erro:
+        conn.rollback()
+        print(f"Erro bestiário: {erro}")
+        await update.message.reply_text(
+            "Não consegui consultar o bestiário agora. Tente novamente em instantes."
+        )
+    finally:
+        cur.close()
+
+
+async def cmd_start(update, context):
+
+    if context.args and context.args[0] == "item":
+
+        await update.message.reply_text(
+            "📚 BIBLIOTECA LEGENDS\n\n"
+            "Escolha uma categoria:",
+            reply_markup=teclado_inicio_biblioteca()
+        )
+
+        return
+
+    await update.message.reply_text(
+        "Olá! Use os comandos disponíveis."
+    )
+
+async def cmd_item(update, context):
+
+    if not await validar_acesso(
+        update,
+        context,
+        "/item"
+    ):
+        return
+
+    if update.effective_chat.type != "private":
+
+            bot_username = (
+                await context.bot.get_me()
             ).username
 
             teclado = InlineKeyboardMarkup([
@@ -610,6 +2804,7 @@ async def mostrar_item(
     cur = conn.cursor()
 
     cur.execute("""
+
         SELECT *
         FROM itens_legends
         WHERE id=%s
@@ -1011,6 +3206,7 @@ async def callback_biblioteca(update, context):
 
     if dados == "cat_arqueiro_escudo":
 
+
         await query.edit_message_text(
             "🛡 ESCUDOS - ARQUEIRO",
             reply_markup=teclado_itens(
@@ -1409,6 +3605,7 @@ def main():
     )
 
     print("4 - Iniciando polling")
+
 
     app.run_polling(
         drop_pending_updates=True,
