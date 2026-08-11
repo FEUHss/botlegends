@@ -379,9 +379,13 @@ def inicializar_banco():
             (61, "Wyvern", "Montanhas Gélidas", "Caçada", "Raro", 360, 58, 18, 320, 240, None, "Wikia oficial", False),
             (62, "Dragão Jovem", "Montanhas Gélidas", "Caçada", "Boss", 480, 70, 22, 420, 320, None, "Wikia oficial", False),
 
-            # Fortaleza dos Orcs — patch oficial; estatísticas ainda a confirmar
-            (63, "Orc", "Fortaleza dos Orcs", "Caçada", None, None, None, None, None, None, "Pele de Goblin", "Notícia oficial do Teletofus", False),
-            (64, "Goblin", "Fortaleza dos Orcs", "Caçada", None, None, None, None, None, None, "Pele de Orc", "Notícia oficial do Teletofus", False),
+            # Fortaleza dos Orcs — variantes confirmadas em caçadas no bot oficial.
+            # O XP abaixo é o valor-base: a tela mostrou o total com +10% da guilda.
+            # ATK/DEF ficam vazios porque dano recebido/causado depende do personagem.
+            (63, "Orc Warmarshal", "Fortaleza dos Orcs", "Caçada", None, 1150, None, None, 4600, 380, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
+            (64, "Orc Wolf Rider", "Fortaleza dos Orcs", "Caçada", None, 800, None, None, 3200, 250, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
+            (65, "Orc Caçador", "Fortaleza dos Orcs", "Caçada", None, 850, None, None, 3400, 265, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
+            (66, "Orc Berserker", "Fortaleza dos Orcs", "Caçada", None, 950, None, None, None, None, None, "Teletofus oficial — HP confirmado em 11/08/2026; recompensas não obtidas", True),
 
             # Abismo
             (65, "Demônio Menor", "Abismo", "Caçada", "Raro", 380, 68, 20, 380, 280, None, "Wikia oficial", False),
@@ -391,6 +395,62 @@ def inicializar_banco():
             (69, "Cria do Vazio", "Abismo", "Caçada", "Raro", 430, 78, 23, 460, 330, None, "Wikia oficial", False),
             (70, "Lorde do Abismo", "Abismo", "Caçada", "Boss", 650, 95, 28, 620, 480, None, "Wikia oficial", False),
         ]
+
+        # Preserva os IDs dos dois placeholders antigos da Fortaleza e os converte
+        # nas primeiras variantes confirmadas. Assim, uma base já existente recebe
+        # a correção sem apagar relações que possam apontar para esses registros.
+        cur.execute("""
+            UPDATE catalogo_monstros AS cm
+            SET nome = 'Orc Warmarshal',
+                raridade = NULL,
+                hp = 1150,
+                atk = NULL,
+                defesa = NULL,
+                xp = 4600,
+                gold = 380,
+                drops = NULL,
+                fonte = 'Teletofus oficial — caçada observada em 11/08/2026',
+                confirmado = TRUE,
+                atualizado_em = CURRENT_TIMESTAMP
+            FROM catalogo_mapas AS mapa
+            WHERE cm.mapa_id = mapa.id
+              AND mapa.nome = 'Fortaleza dos Orcs'
+              AND cm.nome = 'Orc'
+              AND cm.tipo = 'Caçada'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM catalogo_monstros AS existente
+                  WHERE existente.mapa_id = cm.mapa_id
+                    AND existente.tipo = cm.tipo
+                    AND existente.nome = 'Orc Warmarshal'
+              )
+        """)
+        cur.execute("""
+            UPDATE catalogo_monstros AS cm
+            SET nome = 'Orc Wolf Rider',
+                raridade = NULL,
+                hp = 800,
+                atk = NULL,
+                defesa = NULL,
+                xp = 3200,
+                gold = 250,
+                drops = NULL,
+                fonte = 'Teletofus oficial — caçada observada em 11/08/2026',
+                confirmado = TRUE,
+                atualizado_em = CURRENT_TIMESTAMP
+            FROM catalogo_mapas AS mapa
+            WHERE cm.mapa_id = mapa.id
+              AND mapa.nome = 'Fortaleza dos Orcs'
+              AND cm.nome = 'Goblin'
+              AND cm.tipo = 'Caçada'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM catalogo_monstros AS existente
+                  WHERE existente.mapa_id = cm.mapa_id
+                    AND existente.tipo = cm.tipo
+                    AND existente.nome = 'Orc Wolf Rider'
+              )
+        """)
         cur.executemany("""
             INSERT INTO catalogo_monstros
                 (ordem, nome, mapa_id, tipo, raridade, hp, atk, defesa,
