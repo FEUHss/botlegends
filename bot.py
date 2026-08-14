@@ -179,21 +179,6 @@ def inicializar_banco():
         )
         """,
         """
-        ALTER TABLE itens_legends
-            ALTER COLUMN nome TYPE TEXT,
-            ALTER COLUMN classe TYPE TEXT,
-            ALTER COLUMN categoria TYPE TEXT,
-            ALTER COLUMN raridade TYPE TEXT,
-            ALTER COLUMN descricao TYPE TEXT,
-            ALTER COLUMN drop_1 TYPE TEXT,
-            ALTER COLUMN drop_2 TYPE TEXT,
-            ALTER COLUMN drop_3 TYPE TEXT,
-            ALTER COLUMN mapa TYPE TEXT,
-            ALTER COLUMN obtencao TYPE TEXT,
-            ALTER COLUMN chance_drop TYPE TEXT,
-            ALTER COLUMN passiva TYPE TEXT
-        """,
-        """
         CREATE TABLE IF NOT EXISTS catalogo_mapas (
             id BIGSERIAL PRIMARY KEY,
             ordem INTEGER NOT NULL,
@@ -399,7 +384,6 @@ def inicializar_banco():
             # O XP abaixo é o valor-base: a tela mostrou o total com +10% da guilda.
             # ATK/DEF ficam vazios porque dano recebido/causado depende do personagem.
             (63, "Orc Warmarshal", "Fortaleza dos Orcs", "Caçada", None, 1150, None, None, 4600, 380, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
-
             (64, "Orc Wolf Rider", "Fortaleza dos Orcs", "Caçada", None, 800, None, None, 3200, 250, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
             (65, "Orc Caçador", "Fortaleza dos Orcs", "Caçada", None, 850, None, None, 3400, 265, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
             (66, "Orc Berserker", "Fortaleza dos Orcs", "Caçada", None, 950, None, None, None, None, None, "Teletofus oficial — HP confirmado em 11/08/2026; recompensas não obtidas", True),
@@ -415,6 +399,7 @@ def inicializar_banco():
 
         # Preserva os IDs dos dois placeholders antigos da Fortaleza e os converte
         # nas primeiras variantes confirmadas. Assim, uma base já existente recebe
+
         # a correção sem apagar relações que possam apontar para esses registros.
         cur.execute("""
             UPDATE catalogo_monstros AS cm
@@ -506,14 +491,14 @@ def inicializar_banco():
                 "Broquel da Floresta", "arqueiro", "escudo", "raro",
                 False, 8, None, None, 2, 4, 3, 7, None, None,
                 None, None, None, None, "Floresta Sombria",
-                "Drop na Floresta Sombria", None, None,
+                "Drop", None, None,
             ),
             (
                 "Broquel do Escaravelho Dourado", "arqueiro", "escudo",
                 "lendario", False, 32, None, None, 5, 7, 8, 12, None, None,
                 None, None, None, None, "Deserto Escaldante",
                 "Masmorra do Deserto",
-                "Mesma taxa dos demais equipamentos secundários", None,
+                "Taxa de secundário", None,
             ),
             (
                 "Broquel de Varkrul", "arqueiro", "escudo", "lendario",
@@ -800,7 +785,6 @@ def salvar_xp(tg_id,nome,xp,nivel,xp_restante=None):
                     VALUES (%s,%s,%s,%s,%s)
                 """, (tg_id,nome,xp,nivel,xp_restante))
 
-
         conn.commit()
     except Exception:
         conn.rollback()
@@ -816,6 +800,7 @@ def salvar_status(tg_id,nome,d):
         (telegram_id,nome,atk,def,crit,hp,gold,tofus)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """,(tg_id,nome,d.get("atk"),d.get("def"),d.get("crit"),
+
          d.get("hp"),d.get("gold"),d.get("tofus")))
 
     conn.commit()
@@ -1202,7 +1187,6 @@ def ranking_status(campo, titulo):
 
     dados = cur.fetchall()
 
-
     dados.sort(
         key=lambda x: float(x[1]) if x[1] is not None else 0,
         reverse=True
@@ -1217,6 +1201,7 @@ def ranking_status(campo, titulo):
 
 def ranking_xpdif():
     cur = conn.cursor()
+
 
     cur.execute("""
         SELECT telegram_id, nome, xp, data_hora
@@ -1602,7 +1587,6 @@ async def processar_loot_para_revisao(msg, context):
                     UPDATE loot_evidencias
                     SET status='erro_notificacao'
                     WHERE id=%s AND status='pendente'
-
                 """, (evidencia_id,))
                 conn.commit()
                 print(f"Erro ao enviar revisão de loot {evidencia_id}: {erro}")
@@ -1618,6 +1602,7 @@ async def callback_revisao_loot(update, context):
     query = update.callback_query
     if not query:
         return
+
 
     if update.effective_user.id != LOOT_REVIEWER_ID:
         await query.answer("Somente o revisor pode decidir esta proposta.", show_alert=True)
@@ -2004,7 +1989,6 @@ async def cmd_pvp(update, context):
             f"{i}. {nome} — {pvps} PvPs\n"
         )
 
-
     await update.message.reply_text(texto)
 
 async def mostrar_item_gibby(
@@ -2019,6 +2003,7 @@ async def mostrar_item_gibby(
         SELECT
             nivel_destino,
             resultado
+
         FROM gibby_logs
         WHERE telegram_id=%s
         AND item=%s
@@ -2404,7 +2389,6 @@ async def cmd_gibbygeral(update, context):
 
     cur.execute("""
         SELECT COUNT(*)
-
         FROM gibby_logs
         WHERE resultado='SUCESSO'
         AND nivel_destino=3
@@ -2420,6 +2404,7 @@ async def cmd_gibbygeral(update, context):
 
         cur.execute("""
             SELECT
+
                 SUM(
                     CASE
                         WHEN resultado='SUCESSO'
@@ -2805,7 +2790,6 @@ async def mostrar_monstro_atlas(
         drops_relacionados = [linha[0] for linha in cur.fetchall()]
 
         texto = (
-
             f"👹 MONSTRO {ordem} — {nome}\n\n"
             f"🗺️ {mapa}   🏷️ {tipo or 'a confirmar'}   "
             f"💠 {raridade or 'a confirmar'}\n"
@@ -2821,6 +2805,7 @@ async def mostrar_monstro_atlas(
                 texto += f" e mais {len(drops_relacionados) - 6}"
         else:
             texto += f"🎁 Drops: {drops or 'a confirmar'}"
+
 
         await alvo.edit_message_text(
             texto,
@@ -3207,7 +3192,6 @@ def teclado_itens(
                 f"{nome}{sufixo}"
             )
 
-
         else:
 
             texto_botao = (
@@ -3222,6 +3206,7 @@ def teclado_itens(
                     callback_data=
                     f"item_{item_id}_{classe}_{categoria}"
                 )
+
             ]
         )
 
@@ -3607,7 +3592,6 @@ async def callback_biblioteca(update, context):
             )
         )
 
-
         return
 
     if dados == "voltar_guerreiro":
@@ -3623,6 +3607,7 @@ async def callback_biblioteca(update, context):
         return
 
     # ARQUEIRO
+
 
     if dados == "bib_arqueiro":
 
@@ -4008,7 +3993,6 @@ def main():
     )
 
     app.add_handler(
-
         CommandHandler(
             "hp",
             cmd_hp
@@ -4023,6 +4007,7 @@ def main():
     )
 
     # CALLBACKS DA BIBLIOTECA
+
 
     app.add_handler(
         CallbackQueryHandler(
