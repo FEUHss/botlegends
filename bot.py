@@ -504,42 +504,57 @@ def inicializar_banco():
                 None, None, None, None, None, None, None, None,
             ),
         ]
-        cur.executemany("""
-            INSERT INTO itens_legends (
+        for item in itens_anuncio_ghurak:
+            (
                 nome, classe, categoria, raridade, duas_maos, nivel,
                 atk_min, atk_max, def_min, def_max, hp_min, hp_max,
                 crit_min, crit_max, descricao, drop_1, drop_2, drop_3,
-                mapa, obtencao, chance_drop, passiva
+                mapa, obtencao, chance_drop, passiva,
+            ) = item
+            valores = (
+                classe, categoria, raridade, duas_maos, nivel,
+                atk_min, atk_max, def_min, def_max, hp_min, hp_max,
+                crit_min, crit_max, descricao, drop_1, drop_2, drop_3,
+                mapa, obtencao, chance_drop, passiva, nome,
             )
-            VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
-            ON CONFLICT (nome) DO UPDATE SET
-                classe = EXCLUDED.classe,
-                categoria = EXCLUDED.categoria,
-                raridade = EXCLUDED.raridade,
-                duas_maos = EXCLUDED.duas_maos,
-                nivel = COALESCE(EXCLUDED.nivel, itens_legends.nivel),
-                atk_min = COALESCE(EXCLUDED.atk_min, itens_legends.atk_min),
-                atk_max = COALESCE(EXCLUDED.atk_max, itens_legends.atk_max),
-                def_min = COALESCE(EXCLUDED.def_min, itens_legends.def_min),
-                def_max = COALESCE(EXCLUDED.def_max, itens_legends.def_max),
-                hp_min = COALESCE(EXCLUDED.hp_min, itens_legends.hp_min),
-                hp_max = COALESCE(EXCLUDED.hp_max, itens_legends.hp_max),
-                crit_min = COALESCE(EXCLUDED.crit_min, itens_legends.crit_min),
-                crit_max = COALESCE(EXCLUDED.crit_max, itens_legends.crit_max),
-                descricao = COALESCE(EXCLUDED.descricao, itens_legends.descricao),
-                drop_1 = COALESCE(EXCLUDED.drop_1, itens_legends.drop_1),
-                drop_2 = COALESCE(EXCLUDED.drop_2, itens_legends.drop_2),
-                drop_3 = COALESCE(EXCLUDED.drop_3, itens_legends.drop_3),
-                mapa = COALESCE(EXCLUDED.mapa, itens_legends.mapa),
-                obtencao = COALESCE(EXCLUDED.obtencao, itens_legends.obtencao),
-                chance_drop = COALESCE(
-                    EXCLUDED.chance_drop, itens_legends.chance_drop
-                ),
-                passiva = COALESCE(EXCLUDED.passiva, itens_legends.passiva)
-        """, itens_anuncio_ghurak)
+            cur.execute("""
+                UPDATE itens_legends
+                SET classe=%s,
+                    categoria=%s,
+                    raridade=%s,
+                    duas_maos=%s,
+                    nivel=COALESCE(%s, nivel),
+                    atk_min=COALESCE(%s, atk_min),
+                    atk_max=COALESCE(%s, atk_max),
+                    def_min=COALESCE(%s, def_min),
+                    def_max=COALESCE(%s, def_max),
+                    hp_min=COALESCE(%s, hp_min),
+                    hp_max=COALESCE(%s, hp_max),
+                    crit_min=COALESCE(%s, crit_min),
+                    crit_max=COALESCE(%s, crit_max),
+                    descricao=COALESCE(%s, descricao),
+                    drop_1=COALESCE(%s, drop_1),
+                    drop_2=COALESCE(%s, drop_2),
+                    drop_3=COALESCE(%s, drop_3),
+                    mapa=COALESCE(%s, mapa),
+                    obtencao=COALESCE(%s, obtencao),
+                    chance_drop=COALESCE(%s, chance_drop),
+                    passiva=COALESCE(%s, passiva)
+                WHERE LOWER(nome)=LOWER(%s)
+            """, valores)
+            if cur.rowcount == 0:
+                cur.execute("""
+                    INSERT INTO itens_legends (
+                        nome, classe, categoria, raridade, duas_maos, nivel,
+                        atk_min, atk_max, def_min, def_max, hp_min, hp_max,
+                        crit_min, crit_max, descricao, drop_1, drop_2, drop_3,
+                        mapa, obtencao, chance_drop, passiva
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                """, item)
         conn.commit()
         print("0 - Estrutura do banco verificada")
     finally:
