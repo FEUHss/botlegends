@@ -472,17 +472,17 @@ def inicializar_banco():
         itens_anuncio_ghurak = [
             (
                 "Anel Certeiro de Ghurak", "arqueiro", "anel", "lendario",
-                False, None, 3, 7, 5, 8, 12, 18, 8, 12,
+                False, 46, 3, 7, 5, 8, 12, 18, 8, 12,
                 None, None, None, None, None, None, None, None,
             ),
             (
                 "Anel Arcano de Ghurak", "mago", "anel", "lendario",
-                False, None, 8, 13, 3, 5, 16, 22, 4, 8,
+                False, 46, 8, 13, 3, 5, 16, 22, 4, 8,
                 None, None, None, None, None, None, None, None,
             ),
             (
                 "Anel de Ferro de Ghurak", "guerreiro", "anel", "lendario",
-                False, None, 5, 9, 8, 12, 10, 15, 2, 4,
+                False, 46, 5, 9, 8, 12, 10, 15, 2, 4,
                 None, None, None, None, None, None, None, None,
             ),
             (
