@@ -465,6 +465,81 @@ def inicializar_banco():
             for ordem, nome, mapa, tipo, raridade, hp, atk, defesa,
                 xp, gold, drops, fonte, confirmado in monstros_iniciais
         ])
+
+        # Itens anunciados no jogo em 11/08/2026. O upsert mantém o ID dos
+        # registros existentes (especialmente o Broquel de Varkrul) e, com
+        # isso, preserva favoritos e relações de drop já cadastradas.
+        itens_anuncio_ghurak = [
+            (
+                "Anel Certeiro de Ghurak", "arqueiro", "anel", "lendario",
+                False, None, 3, 7, 5, 8, 12, 18, 8, 12,
+                None, None, None, None, None, None, None, None,
+            ),
+            (
+                "Anel Arcano de Ghurak", "mago", "anel", "lendario",
+                False, None, 8, 13, 3, 5, 16, 22, 4, 8,
+                None, None, None, None, None, None, None, None,
+            ),
+            (
+                "Anel de Ferro de Ghurak", "guerreiro", "anel", "lendario",
+                False, None, 5, 9, 8, 12, 10, 15, 2, 4,
+                None, None, None, None, None, None, None, None,
+            ),
+            (
+                "Broquel da Floresta", "arqueiro", "escudo", "raro",
+                False, 8, None, None, 2, 4, 3, 7, None, None,
+                None, None, None, None, "Floresta Sombria",
+                "Drop na Floresta Sombria", None, None,
+            ),
+            (
+                "Broquel do Escaravelho Dourado", "arqueiro", "escudo",
+                "lendario", False, 32, None, None, 5, 7, 8, 12, None, None,
+                None, None, None, None, "Deserto Escaldante",
+                "Masmorra do Deserto",
+                "Mesma taxa dos demais equipamentos secundários", None,
+            ),
+            (
+                "Broquel de Varkrul", "arqueiro", "escudo", "lendario",
+                False, 42, None, None, 8, 12, 12, 18, None, None,
+                None, None, None, None, None, None, None, None,
+            ),
+        ]
+        cur.executemany("""
+            INSERT INTO itens_legends (
+                nome, classe, categoria, raridade, duas_maos, nivel,
+                atk_min, atk_max, def_min, def_max, hp_min, hp_max,
+                crit_min, crit_max, descricao, drop_1, drop_2, drop_3,
+                mapa, obtencao, chance_drop, passiva
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (nome) DO UPDATE SET
+                classe = EXCLUDED.classe,
+                categoria = EXCLUDED.categoria,
+                raridade = EXCLUDED.raridade,
+                duas_maos = EXCLUDED.duas_maos,
+                nivel = COALESCE(EXCLUDED.nivel, itens_legends.nivel),
+                atk_min = COALESCE(EXCLUDED.atk_min, itens_legends.atk_min),
+                atk_max = COALESCE(EXCLUDED.atk_max, itens_legends.atk_max),
+                def_min = COALESCE(EXCLUDED.def_min, itens_legends.def_min),
+                def_max = COALESCE(EXCLUDED.def_max, itens_legends.def_max),
+                hp_min = COALESCE(EXCLUDED.hp_min, itens_legends.hp_min),
+                hp_max = COALESCE(EXCLUDED.hp_max, itens_legends.hp_max),
+                crit_min = COALESCE(EXCLUDED.crit_min, itens_legends.crit_min),
+                crit_max = COALESCE(EXCLUDED.crit_max, itens_legends.crit_max),
+                descricao = COALESCE(EXCLUDED.descricao, itens_legends.descricao),
+                drop_1 = COALESCE(EXCLUDED.drop_1, itens_legends.drop_1),
+                drop_2 = COALESCE(EXCLUDED.drop_2, itens_legends.drop_2),
+                drop_3 = COALESCE(EXCLUDED.drop_3, itens_legends.drop_3),
+                mapa = COALESCE(EXCLUDED.mapa, itens_legends.mapa),
+                obtencao = COALESCE(EXCLUDED.obtencao, itens_legends.obtencao),
+                chance_drop = COALESCE(
+                    EXCLUDED.chance_drop, itens_legends.chance_drop
+                ),
+                passiva = COALESCE(EXCLUDED.passiva, itens_legends.passiva)
+        """, itens_anuncio_ghurak)
         conn.commit()
         print("0 - Estrutura do banco verificada")
     finally:
