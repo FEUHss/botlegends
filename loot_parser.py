@@ -18,6 +18,42 @@ def normalizar(texto):
     return re.sub(r"\s+", " ", texto).strip().casefold()
 
 
+def extrair_monstro_combate(texto):
+    """Extrai nome e HP do inimigo na tela 'COMBATE INICIADO'."""
+    linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
+    indice = next(
+        (i for i, linha in enumerate(linhas)
+         if "combate iniciado" in normalizar(linha)),
+        None,
+    )
+    if indice is None or indice + 1 >= len(linhas):
+        return None
+
+    nome = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[indice + 1]).strip()
+    if not nome:
+        return None
+
+    hp = None
+    for linha in linhas[indice + 2:]:
+        if normalizar(linha).endswith("voce"):
+            break
+        match = re.search(r"(?:❤️?\s*)?([\d.,]+)\s*/\s*([\d.,]+)", linha)
+        if match:
+            hp = int(re.sub(r"\D", "", match.group(2)))
+            break
+
+    return {"nome": nome, "hp": hp}
+
+
+def chave_origem_drop(item_id, monstro_id=None, mapa_id=None, forma=None):
+    """Chave semântica: variações de legenda não repetem a mesma origem."""
+    if monstro_id:
+        return f"{item_id}:monstro:{monstro_id}"
+    if mapa_id:
+        return f"{item_id}:mapa:{mapa_id}"
+    return f"{item_id}:forma:{normalizar(forma or '')}"
+
+
 def tem_marcador_recompensa(texto):
     texto_normalizado = normalizar(texto)
     return any(marcador in texto_normalizado for marcador in MARCADORES_RECOMPENSA)
@@ -135,3 +171,4 @@ def analisar_texto_loot(texto, itens, mapas):
         }
         for item_id, item_nome in itens_encontrados
     ]
+
