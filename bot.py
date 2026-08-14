@@ -1,3 +1,4 @@
+
 import os
 import re
 import random
@@ -176,6 +177,21 @@ def inicializar_banco():
             chance_drop TEXT,
             passiva TEXT
         )
+        """,
+        """
+        ALTER TABLE itens_legends
+            ALTER COLUMN nome TYPE TEXT,
+            ALTER COLUMN classe TYPE TEXT,
+            ALTER COLUMN categoria TYPE TEXT,
+            ALTER COLUMN raridade TYPE TEXT,
+            ALTER COLUMN descricao TYPE TEXT,
+            ALTER COLUMN drop_1 TYPE TEXT,
+            ALTER COLUMN drop_2 TYPE TEXT,
+            ALTER COLUMN drop_3 TYPE TEXT,
+            ALTER COLUMN mapa TYPE TEXT,
+            ALTER COLUMN obtencao TYPE TEXT,
+            ALTER COLUMN chance_drop TYPE TEXT,
+            ALTER COLUMN passiva TYPE TEXT
         """,
         """
         CREATE TABLE IF NOT EXISTS catalogo_mapas (
@@ -383,6 +399,7 @@ def inicializar_banco():
             # O XP abaixo é o valor-base: a tela mostrou o total com +10% da guilda.
             # ATK/DEF ficam vazios porque dano recebido/causado depende do personagem.
             (63, "Orc Warmarshal", "Fortaleza dos Orcs", "Caçada", None, 1150, None, None, 4600, 380, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
+
             (64, "Orc Wolf Rider", "Fortaleza dos Orcs", "Caçada", None, 800, None, None, 3200, 250, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
             (65, "Orc Caçador", "Fortaleza dos Orcs", "Caçada", None, 850, None, None, 3400, 265, None, "Teletofus oficial — caçada observada em 11/08/2026", True),
             (66, "Orc Berserker", "Fortaleza dos Orcs", "Caçada", None, 950, None, None, None, None, None, "Teletofus oficial — HP confirmado em 11/08/2026; recompensas não obtidas", True),
@@ -782,6 +799,7 @@ def salvar_xp(tg_id,nome,xp,nivel,xp_restante=None):
                     (telegram_id,nome,xp,nivel,xp_restante)
                     VALUES (%s,%s,%s,%s,%s)
                 """, (tg_id,nome,xp,nivel,xp_restante))
+
 
         conn.commit()
     except Exception:
@@ -1184,6 +1202,7 @@ def ranking_status(campo, titulo):
 
     dados = cur.fetchall()
 
+
     dados.sort(
         key=lambda x: float(x[1]) if x[1] is not None else 0,
         reverse=True
@@ -1583,6 +1602,7 @@ async def processar_loot_para_revisao(msg, context):
                     UPDATE loot_evidencias
                     SET status='erro_notificacao'
                     WHERE id=%s AND status='pendente'
+
                 """, (evidencia_id,))
                 conn.commit()
                 print(f"Erro ao enviar revisão de loot {evidencia_id}: {erro}")
@@ -1984,6 +2004,7 @@ async def cmd_pvp(update, context):
             f"{i}. {nome} — {pvps} PvPs\n"
         )
 
+
     await update.message.reply_text(texto)
 
 async def mostrar_item_gibby(
@@ -2383,6 +2404,7 @@ async def cmd_gibbygeral(update, context):
 
     cur.execute("""
         SELECT COUNT(*)
+
         FROM gibby_logs
         WHERE resultado='SUCESSO'
         AND nivel_destino=3
@@ -2783,6 +2805,7 @@ async def mostrar_monstro_atlas(
         drops_relacionados = [linha[0] for linha in cur.fetchall()]
 
         texto = (
+
             f"👹 MONSTRO {ordem} — {nome}\n\n"
             f"🗺️ {mapa}   🏷️ {tipo or 'a confirmar'}   "
             f"💠 {raridade or 'a confirmar'}\n"
@@ -3184,6 +3207,7 @@ def teclado_itens(
                 f"{nome}{sufixo}"
             )
 
+
         else:
 
             texto_botao = (
@@ -3582,6 +3606,7 @@ async def callback_biblioteca(update, context):
                 "colar"
             )
         )
+
 
         return
 
@@ -3983,6 +4008,7 @@ def main():
     )
 
     app.add_handler(
+
         CommandHandler(
             "hp",
             cmd_hp
