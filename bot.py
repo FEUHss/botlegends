@@ -4262,7 +4262,7 @@ def main():
 
     print("3 - Handlers registrados")
 
-    # DETECTOR DE PERFIS
+    # DETECTOR DE PERFIS, LOOTS E CADASTRO VISUAL DE MONSTROS
 
     app.add_handler(
         MessageHandler(
