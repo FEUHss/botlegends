@@ -5,7 +5,12 @@ import random
 import psycopg2
 import pytz
 from datetime import datetime, timedelta
-from loot_parser import analisar_texto_loot, normalizar
+from loot_parser import (
+    analisar_texto_loot,
+    chave_origem_drop,
+    extrair_monstro_combate,
+    normalizar,
+)
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -250,6 +255,25 @@ def inicializar_banco():
             ultima_observacao TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             confirmado BOOLEAN NOT NULL DEFAULT TRUE
         )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS monstro_aliases (
+            alias_normalizado TEXT PRIMARY KEY,
+            alias TEXT NOT NULL,
+            monstro_id BIGINT NOT NULL,
+            criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS monstro_imagens (
+            id BIGSERIAL PRIMARY KEY,
+            monstro_id BIGINT NOT NULL,
+            telegram_file_id TEXT NOT NULL,
+            telegram_file_unique_id TEXT UNIQUE NOT NULL,
+            nome_detectado TEXT NOT NULL,
+            hp_detectado BIGINT,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
         """
     ]
 
@@ -375,6 +399,7 @@ def inicializar_banco():
             # Montanhas Gélidas
             (57, "Golem de Gelo", "Montanhas Gélidas", "Caçada", "Incomum", 320, 50, 16, 260, 200, None, "Wikia oficial", False),
             (58, "Harpia", "Montanhas Gélidas", "Caçada", "Incomum", 300, 48, 14, 250, 190, None, "Wikia oficial", False),
+
             (59, "Orc do Gelo", "Montanhas Gélidas", "Caçada", "Incomum", 310, 52, 15, 260, 200, None, "Wikia oficial", False),
             (60, "Yeti", "Montanhas Gélidas", "Caçada", "Raro", 340, 54, 17, 280, 220, None, "Wikia oficial", False),
             (61, "Wyvern", "Montanhas Gélidas", "Caçada", "Raro", 360, 58, 18, 320, 240, None, "Wikia oficial", False),
@@ -399,7 +424,6 @@ def inicializar_banco():
 
         # Preserva os IDs dos dois placeholders antigos da Fortaleza e os converte
         # nas primeiras variantes confirmadas. Assim, uma base já existente recebe
-
         # a correção sem apagar relações que possam apontar para esses registros.
         cur.execute("""
             UPDATE catalogo_monstros AS cm
@@ -777,6 +801,7 @@ def salvar_xp(tg_id,nome,xp,nivel,xp_restante=None):
                 LIMIT 1
             """, (tg_id,))
 
+
             ultimo_progresso = cur.fetchone()
             if ultimo_progresso != (xp, nivel, xp_restante):
                 cur.execute("""
@@ -800,7 +825,6 @@ def salvar_status(tg_id,nome,d):
         (telegram_id,nome,atk,def,crit,hp,gold,tofus)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """,(tg_id,nome,d.get("atk"),d.get("def"),d.get("crit"),
-
          d.get("hp"),d.get("gold"),d.get("tofus")))
 
     conn.commit()
@@ -1177,6 +1201,7 @@ def ranking_status(campo, titulo):
     cur = conn.cursor()
 
     cur.execute(f"""
+
         SELECT DISTINCT ON (telegram_id)
                nome,
                {campo}
@@ -1201,7 +1226,6 @@ def ranking_status(campo, titulo):
 
 def ranking_xpdif():
     cur = conn.cursor()
-
 
     cur.execute("""
         SELECT telegram_id, nome, xp, data_hora
@@ -1433,14 +1457,19 @@ def mensagem_encaminhada_pelo_teletofus(msg):
 
 
 def chave_relacao_drop(item_id, monstro_id, mapa_id, forma_obtencao):
-    forma = normalizar(forma_obtencao or "")
-    return f"{item_id}:{monstro_id or 0}:{mapa_id or 0}:{forma}"
+    return chave_origem_drop(
+        item_id,
+        monstro_id=monstro_id,
+        mapa_id=mapa_id,
+        forma=forma_obtencao,
+    )
 
 
 def resolver_monstro_catalogo(cur, nome_detectado, mapa_id=None):
     if not nome_detectado:
         return None
 
+    nome_normalizado = normalizar(nome_detectado)
     cur.execute("""
         SELECT cm.id, cm.nome, cm.mapa_id
         FROM catalogo_monstros cm
@@ -1448,8 +1477,17 @@ def resolver_monstro_catalogo(cur, nome_detectado, mapa_id=None):
     """)
     candidatos = [
         row for row in cur.fetchall()
-        if normalizar(row[1]) == normalizar(nome_detectado)
+        if normalizar(row[1]) == nome_normalizado
     ]
+
+    if not candidatos:
+        cur.execute("""
+            SELECT cm.id, cm.nome, cm.mapa_id
+            FROM monstro_aliases alias
+            JOIN catalogo_monstros cm ON cm.id=alias.monstro_id
+            WHERE alias.alias_normalizado=%s
+        """, (nome_normalizado,))
+        candidatos = cur.fetchall()
 
     if mapa_id:
         candidatos_mapa = [row for row in candidatos if row[2] == mapa_id]
@@ -1459,6 +1497,143 @@ def resolver_monstro_catalogo(cur, nome_detectado, mapa_id=None):
     if len(candidatos) == 1:
         return candidatos[0]
     return None
+
+
+def resolver_monstro_por_imagem(cur, msg):
+    if not msg.photo:
+        return None
+    file_unique_id = msg.photo[-1].file_unique_id
+    cur.execute("""
+        SELECT cm.id, cm.nome, cm.mapa_id
+        FROM monstro_imagens imagem
+        JOIN catalogo_monstros cm ON cm.id=imagem.monstro_id
+        WHERE imagem.telegram_file_unique_id=%s
+        ORDER BY imagem.atualizado_em DESC
+        LIMIT 1
+    """, (file_unique_id,))
+    return cur.fetchone()
+
+
+def candidatos_monstro_semelhante(cur, nome_detectado):
+    procurado = normalizar(nome_detectado)
+    cur.execute("""
+        SELECT id, nome, mapa_id
+        FROM catalogo_monstros
+        ORDER BY ordem, id
+    """)
+    return [
+        row for row in cur.fetchall()
+        if normalizar(row[1]) in procurado or procurado in normalizar(row[1])
+    ]
+
+
+async def processar_imagem_monstro(msg):
+    if (
+        msg.chat.type != "private"
+        or not msg.from_user
+        or msg.from_user.id != LOOT_REVIEWER_ID
+        or not mensagem_encaminhada_pelo_teletofus(msg)
+        or not msg.photo
+    ):
+        return False
+
+    dados = extrair_monstro_combate(msg.caption or msg.text or "")
+    if not dados:
+        return False
+
+    cur = conn.cursor()
+    try:
+        monstro = resolver_monstro_catalogo(cur, dados["nome"])
+        if not monstro:
+            semelhantes = candidatos_monstro_semelhante(cur, dados["nome"])
+            if len(semelhantes) != 1:
+                nomes = ", ".join(row[1] for row in semelhantes[:6]) or "nenhum"
+                await msg.reply_text(
+                    "⚠️ Não encontrei um único monstro compatível.\n\n"
+                    f"Nome recebido: {dados['nome']}\n"
+                    f"Possíveis candidatos: {nomes}\n\n"
+                    "A imagem não foi salva."
+                )
+                return True
+            monstro = semelhantes[0]
+
+        monstro_id, nome_antigo, mapa_id = monstro
+        nome_novo = dados["nome"].strip()
+        if normalizar(nome_antigo) != normalizar(nome_novo):
+            cur.execute("""
+                SELECT 1 FROM catalogo_monstros
+                WHERE LOWER(nome)=LOWER(%s) AND id<>%s
+                LIMIT 1
+            """, (nome_novo, monstro_id))
+            if cur.fetchone():
+                await msg.reply_text(
+                    "⚠️ Já existe outro monstro com esse nome. "
+                    "A imagem não foi salva para evitar uma associação incorreta."
+                )
+                conn.rollback()
+                return True
+
+            cur.execute("""
+                INSERT INTO monstro_aliases
+                    (alias_normalizado, alias, monstro_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (alias_normalizado) DO UPDATE SET
+                    alias=EXCLUDED.alias,
+                    monstro_id=EXCLUDED.monstro_id
+            """, (normalizar(nome_antigo), nome_antigo, monstro_id))
+            cur.execute("""
+                UPDATE catalogo_monstros
+                SET nome=%s,
+                    hp=COALESCE(%s, hp),
+                    confirmado=TRUE,
+                    atualizado_em=CURRENT_TIMESTAMP
+                WHERE id=%s
+            """, (nome_novo, dados["hp"], monstro_id))
+        elif dados["hp"] is not None:
+            cur.execute("""
+                UPDATE catalogo_monstros
+                SET hp=%s, confirmado=TRUE, atualizado_em=CURRENT_TIMESTAMP
+                WHERE id=%s
+            """, (dados["hp"], monstro_id))
+
+        foto = msg.photo[-1]
+        cur.execute("""
+            INSERT INTO monstro_imagens
+                (monstro_id, telegram_file_id, telegram_file_unique_id,
+                 nome_detectado, hp_detectado)
+            VALUES (%s, %s, %s, %s, %s)
+
+            ON CONFLICT (telegram_file_unique_id) DO UPDATE SET
+                monstro_id=EXCLUDED.monstro_id,
+                telegram_file_id=EXCLUDED.telegram_file_id,
+                nome_detectado=EXCLUDED.nome_detectado,
+                hp_detectado=EXCLUDED.hp_detectado,
+                atualizado_em=CURRENT_TIMESTAMP
+        """, (
+            monstro_id, foto.file_id, foto.file_unique_id,
+            nome_novo, dados["hp"],
+        ))
+        cur.execute("SELECT nome FROM catalogo_mapas WHERE id=%s", (mapa_id,))
+        row_mapa = cur.fetchone()
+        conn.commit()
+
+        alteracao = ""
+        if normalizar(nome_antigo) != normalizar(nome_novo):
+            alteracao = f"\n✏️ Nome alterado: {nome_antigo} → {nome_novo}"
+        await msg.reply_text(
+            f"✅ Imagem salva para {nome_novo}."
+            f"{alteracao}\n"
+            f"🗺️ Mapa: {row_mapa[0] if row_mapa else 'não identificado'}\n"
+            f"❤️ HP: {dados['hp'] if dados['hp'] is not None else 'não informado'}"
+        )
+        return True
+    except Exception as erro:
+        conn.rollback()
+        print(f"Erro ao cadastrar imagem de monstro: {erro}")
+        await msg.reply_text("⚠️ Não consegui salvar a imagem deste monstro.")
+        return True
+    finally:
+        cur.close()
 
 
 async def processar_loot_para_revisao(msg, context):
@@ -1484,6 +1659,10 @@ async def processar_loot_para_revisao(msg, context):
                 proposta["monstro_nome"],
                 proposta["mapa_id"],
             )
+            identificado_por_imagem = False
+            if not monstro:
+                monstro = resolver_monstro_por_imagem(cur, msg)
+                identificado_por_imagem = monstro is not None
             monstro_id = monstro[0] if monstro else None
             mapa_id = proposta["mapa_id"]
             mapa_nome = proposta["mapa_nome"]
@@ -1504,17 +1683,46 @@ async def processar_loot_para_revisao(msg, context):
                 proposta["forma_obtencao"],
             )
 
-            cur.execute(
-                "SELECT 1 FROM item_drop_relacoes WHERE chave_unica=%s AND confirmado=TRUE",
-                (relacao_chave,),
-            )
+            cur.execute("""
+                SELECT 1
+                FROM item_drop_relacoes
+                WHERE item_id=%s AND confirmado=TRUE
+                  AND (
+                    (%s IS NOT NULL AND monstro_id=%s)
+                    OR (%s IS NULL AND %s IS NOT NULL
+                        AND monstro_id IS NULL AND mapa_id=%s)
+                    OR (%s IS NULL AND %s IS NULL
+                        AND monstro_id IS NULL AND mapa_id IS NULL
+                        AND LOWER(COALESCE(forma_obtencao, ''))=LOWER(%s))
+                  )
+                LIMIT 1
+            """, (
+                proposta["item_id"], monstro_id, monstro_id,
+                monstro_id, mapa_id, mapa_id,
+                monstro_id, mapa_id, proposta["forma_obtencao"] or "",
+            ))
             if cur.fetchone():
                 continue
 
-            cur.execute(
-                "SELECT 1 FROM loot_evidencias WHERE relacao_chave=%s AND status='pendente'",
-                (relacao_chave,),
-            )
+            cur.execute("""
+                SELECT 1
+                FROM loot_evidencias
+                WHERE item_id=%s
+                  AND status IN ('pendente', 'aprovado', 'rejeitado')
+                  AND (
+                    (%s IS NOT NULL AND monstro_id=%s)
+                    OR (%s IS NULL AND %s IS NOT NULL
+                        AND monstro_id IS NULL AND mapa_id=%s)
+                    OR (%s IS NULL AND %s IS NULL
+                        AND monstro_id IS NULL AND mapa_id IS NULL
+                        AND LOWER(COALESCE(forma_obtencao, ''))=LOWER(%s))
+                  )
+                LIMIT 1
+            """, (
+                proposta["item_id"], monstro_id, monstro_id,
+                monstro_id, mapa_id, mapa_id,
+                monstro_id, mapa_id, proposta["forma_obtencao"] or "",
+            ))
             if cur.fetchone():
                 continue
 
@@ -1553,9 +1761,13 @@ async def processar_loot_para_revisao(msg, context):
             evidencia_id = row[0]
             conn.commit()
 
-            monstro_texto = proposta["monstro_nome"] or "não identificado"
+            monstro_texto = monstro[1] if identificado_por_imagem else (
+                proposta["monstro_nome"] or "não identificado"
+            )
             if proposta["monstro_nome"] and not monstro_id:
                 monstro_texto += " (não cadastrado/ambíguo)"
+            if identificado_por_imagem:
+                monstro_texto += " (identificado pela imagem)"
 
             teclado = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
@@ -1602,7 +1814,6 @@ async def callback_revisao_loot(update, context):
     query = update.callback_query
     if not query:
         return
-
 
     if update.effective_user.id != LOOT_REVIEWER_ID:
         await query.answer("Somente o revisor pode decidir esta proposta.", show_alert=True)
@@ -1709,6 +1920,9 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not texto:
         return
 
+    if await processar_imagem_monstro(msg):
+        return
+
     # =========================
     # CAÇADA EM DUPLA
     # =========================
@@ -1789,6 +2003,7 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dados_gibby["resultado"],
                 dados_gibby["itens_base"]
             )
+
 
             if dados_gibby["resultado"] == "SUCESSO":
 
@@ -2003,7 +2218,6 @@ async def mostrar_item_gibby(
         SELECT
             nivel_destino,
             resultado
-
         FROM gibby_logs
         WHERE telegram_id=%s
         AND item=%s
@@ -2189,6 +2403,7 @@ async def cmd_gibby(update, context):
     """,(tg_id,))
 
     total, sucessos = cur.fetchone()
+
 
     sucessos = sucessos or 0
 
@@ -2404,7 +2619,6 @@ async def cmd_gibbygeral(update, context):
 
         cur.execute("""
             SELECT
-
                 SUM(
                     CASE
                         WHEN resultado='SUCESSO'
@@ -2590,6 +2804,7 @@ def masmorras_do_mapa_atlas(nome_mapa):
 def nome_area_atlas(nome_mapa, codigo_area):
     if codigo_area == "c":
         return "Caçada"
+
 
     if not codigo_area.startswith("d"):
         return None
@@ -2788,6 +3003,14 @@ async def mostrar_monstro_atlas(
             ORDER BY il.nome
         """, (monstro_id,))
         drops_relacionados = [linha[0] for linha in cur.fetchall()]
+        cur.execute("""
+            SELECT telegram_file_id
+            FROM monstro_imagens
+            WHERE monstro_id=%s
+            ORDER BY atualizado_em DESC
+            LIMIT 1
+        """, (monstro_id,))
+        row_imagem = cur.fetchone()
 
         texto = (
             f"👹 MONSTRO {ordem} — {nome}\n\n"
@@ -2806,6 +3029,14 @@ async def mostrar_monstro_atlas(
         else:
             texto += f"🎁 Drops: {drops or 'a confirmar'}"
 
+        if row_imagem:
+            try:
+                await alvo.message.reply_photo(
+                    photo=row_imagem[0],
+                    caption=f"👹 {nome} — referência visual",
+                )
+            except Exception as erro:
+                print(f"Erro ao exibir imagem do monstro {monstro_id}: {erro}")
 
         await alvo.edit_message_text(
             texto,
@@ -2975,6 +3206,7 @@ async def cmd_start(update, context):
             "Escolha uma categoria:",
             reply_markup=teclado_inicio_biblioteca()
         )
+
 
         return
 
@@ -3206,7 +3438,6 @@ def teclado_itens(
                     callback_data=
                     f"item_{item_id}_{classe}_{categoria}"
                 )
-
             ]
         )
 
@@ -3375,6 +3606,7 @@ async def mostrar_item(
             f"\n🎁 Chance: "
             f"{item['chance_drop']}"
         )
+
 
     cur.execute("""
         SELECT cm.nome,
@@ -3608,7 +3840,6 @@ async def callback_biblioteca(update, context):
 
     # ARQUEIRO
 
-
     if dados == "bib_arqueiro":
 
         await query.edit_message_text(
@@ -3777,6 +4008,7 @@ async def callback_biblioteca(update, context):
                 "bota"
             )
         )
+
 
         return
 
@@ -4008,7 +4240,6 @@ def main():
 
     # CALLBACKS DA BIBLIOTECA
 
-
     app.add_handler(
         CallbackQueryHandler(
             callback_revisao_loot,
@@ -4053,3 +4284,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
