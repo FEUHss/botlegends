@@ -304,7 +304,7 @@ def inicializar_banco():
         """
         CREATE TABLE IF NOT EXISTS item_imagens (
             id BIGSERIAL PRIMARY KEY,
-            item_id BIGINT NOT NULL REFERENCES itens_legends(id),
+            item_id BIGINT NOT NULL,
             telegram_file_id TEXT NOT NULL,
             telegram_file_unique_id TEXT UNIQUE NOT NULL,
             nome_detectado TEXT NOT NULL,
@@ -314,7 +314,7 @@ def inicializar_banco():
         """
         CREATE TABLE IF NOT EXISTS mapa_imagens (
             id BIGSERIAL PRIMARY KEY,
-            mapa_id BIGINT NOT NULL REFERENCES catalogo_mapas(id),
+            mapa_id BIGINT NOT NULL,
             telegram_file_id TEXT NOT NULL,
             telegram_file_unique_id TEXT UNIQUE NOT NULL,
             nome_detectado TEXT NOT NULL,
@@ -324,7 +324,7 @@ def inicializar_banco():
         """
         CREATE TABLE IF NOT EXISTS masmorra_imagens (
             id BIGSERIAL PRIMARY KEY,
-            mapa_id BIGINT NOT NULL REFERENCES catalogo_mapas(id),
+            mapa_id BIGINT NOT NULL,
             nome_masmorra TEXT NOT NULL,
             telegram_file_id TEXT NOT NULL,
             telegram_file_unique_id TEXT UNIQUE NOT NULL,
@@ -344,8 +344,8 @@ def inicializar_banco():
         CREATE TABLE IF NOT EXISTS masmorra_monstro_observacoes (
             id BIGSERIAL PRIMARY KEY,
             chave_unica TEXT UNIQUE NOT NULL,
-            monstro_id BIGINT NOT NULL REFERENCES catalogo_monstros(id),
-            mapa_id BIGINT NOT NULL REFERENCES catalogo_mapas(id),
+            monstro_id BIGINT NOT NULL,
+            mapa_id BIGINT NOT NULL,
             masmorra TEXT NOT NULL,
             andar INTEGER NOT NULL,
             total_andares INTEGER NOT NULL,
