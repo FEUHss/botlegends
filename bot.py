@@ -1,4 +1,3 @@
-
 import os
 import re
 import random
@@ -14,7 +13,8 @@ from loot_parser import (
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup,
+    InputMediaPhoto
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -76,6 +76,17 @@ def inicializar_banco():
         CREATE TABLE IF NOT EXISTS membros (
             telegram_id BIGINT PRIMARY KEY,
             nome TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS membro_administracao (
+            telegram_id BIGINT PRIMARY KEY,
+            ativo BOOLEAN NOT NULL DEFAULT TRUE,
+            telegram_username TEXT,
+            classe TEXT,
+            inativado_em TIMESTAMPTZ,
+            criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            atualizado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """,
         """
@@ -306,6 +317,11 @@ def inicializar_banco():
             SELECT telegram_id, nome FROM membros
             ON CONFLICT (telegram_id, nome) DO NOTHING
         """)
+        cur.execute("""
+            INSERT INTO membro_administracao (telegram_id, ativo)
+            SELECT telegram_id, TRUE FROM membros
+            ON CONFLICT (telegram_id) DO NOTHING
+        """)
 
         mapas_iniciais = [
             (1, "Planície", 1, 1, 2, 1262, 1010, "Mapa inicial do jogo.", "Wikia oficial + Railway Archivus", False),
@@ -399,7 +415,6 @@ def inicializar_banco():
             # Montanhas Gélidas
             (57, "Golem de Gelo", "Montanhas Gélidas", "Caçada", "Incomum", 320, 50, 16, 260, 200, None, "Wikia oficial", False),
             (58, "Harpia", "Montanhas Gélidas", "Caçada", "Incomum", 300, 48, 14, 250, 190, None, "Wikia oficial", False),
-
             (59, "Orc do Gelo", "Montanhas Gélidas", "Caçada", "Incomum", 310, 52, 15, 260, 200, None, "Wikia oficial", False),
             (60, "Yeti", "Montanhas Gélidas", "Caçada", "Raro", 340, 54, 17, 280, 220, None, "Wikia oficial", False),
             (61, "Wyvern", "Montanhas Gélidas", "Caçada", "Raro", 360, 58, 18, 320, 240, None, "Wikia oficial", False),
@@ -648,6 +663,10 @@ def extrair_nivel(texto):
     match = re.search(r"\bLv\s*(\d+)", texto, re.IGNORECASE)
     return int(match.group(1)) if match else None
 
+def extrair_classe(texto):
+    match = re.search(r"^Classe\s*:\s*([^\n\r]+)", texto, re.IGNORECASE | re.MULTILINE)
+    return match.group(1).strip()[:40] if match else None
+
 def extrair_status(texto):
     dados = {}
     bonus_atk = 0
@@ -711,7 +730,7 @@ def extrair_status(texto):
 
     return dados
 
-def registrar_membro(tg_id, nome):
+def registrar_membro(tg_id, nome, telegram_username=None, classe=None):
     cur = conn.cursor()
     try:
         # Impede que um perfil já vinculado seja apropriado por outro ID.
@@ -741,6 +760,17 @@ def registrar_membro(tg_id, nome):
             ON CONFLICT (telegram_id,nome)
             DO UPDATE SET ultima_vista=CURRENT_TIMESTAMP
         """, (tg_id, nome))
+
+        cur.execute("""
+            INSERT INTO membro_administracao
+                (telegram_id, ativo, telegram_username, classe, atualizado_em)
+            VALUES (%s, TRUE, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (telegram_id) DO UPDATE SET
+                telegram_username=COALESCE(EXCLUDED.telegram_username,
+                                           membro_administracao.telegram_username),
+                classe=COALESCE(EXCLUDED.classe, membro_administracao.classe),
+                atualizado_em=CURRENT_TIMESTAMP
+        """, (tg_id, telegram_username, classe))
 
         # O ID do Telegram é a identidade estável. Atualiza o nick de exibição
         # nos registros associados para rankings, presença, caçadas e Gibby.
@@ -801,7 +831,6 @@ def salvar_xp(tg_id,nome,xp,nivel,xp_restante=None):
                 LIMIT 1
             """, (tg_id,))
 
-
             ultimo_progresso = cur.fetchone()
             if ultimo_progresso != (xp, nivel, xp_restante):
                 cur.execute("""
@@ -834,7 +863,10 @@ def buscar_nome_por_id(tg_id):
     cur = conn.cursor()
 
     cur.execute(
-        "SELECT nome FROM membros WHERE telegram_id=%s",
+        """SELECT m.nome
+           FROM membros m
+           LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+           WHERE m.telegram_id=%s AND COALESCE(ma.ativo, TRUE)""",
         (tg_id,)
     )
 
@@ -880,11 +912,24 @@ def membro_cadastrado(tg_id):
         cur.execute(
             """
             SELECT 1
-            FROM membros
-            WHERE telegram_id=%s
+            FROM membros m
+            LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+            WHERE m.telegram_id=%s
+              AND COALESCE(ma.ativo, TRUE)
             """,
             (tg_id,)
         )
+        return cur.fetchone() is not None
+    finally:
+        cur.close()
+
+def membro_inativo(tg_id):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT 1 FROM membro_administracao
+            WHERE telegram_id=%s AND NOT ativo
+        """, (tg_id,))
         return cur.fetchone() is not None
     finally:
         cur.close()
@@ -1169,10 +1214,23 @@ def salvar_gibby(
 def gerar_lista():
     cur = conn.cursor()
 
-    cur.execute("SELECT nome FROM membros ORDER BY nome")
+    cur.execute("""
+        SELECT m.nome
+        FROM membros m
+        LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+        WHERE COALESCE(ma.ativo, TRUE)
+        ORDER BY m.nome
+    """)
     membros = [x[0] for x in cur.fetchall()]
 
-    cur.execute("SELECT nome FROM presencas WHERE data=%s ORDER BY nome",(hoje(),))
+    cur.execute("""
+        SELECT p.nome
+        FROM presencas p
+        JOIN membros m ON m.telegram_id=p.telegram_id
+        LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+        WHERE p.data=%s AND COALESCE(ma.ativo, TRUE)
+        ORDER BY p.nome
+    """,(hoje(),))
     presentes = [x[0] for x in cur.fetchall()]
 
     ausentes = sorted(set(membros)-set(presentes))
@@ -1187,9 +1245,15 @@ def gerar_lista():
 def ranking_xp():
     cur = conn.cursor()
     cur.execute("""
-    SELECT DISTINCT ON (telegram_id) nome,nivel,xp
-    FROM xp_logs
-    ORDER BY telegram_id,data_hora DESC
+    SELECT latest.nome, latest.nivel, latest.xp
+    FROM (
+        SELECT DISTINCT ON (telegram_id) telegram_id, nome, nivel, xp
+        FROM xp_logs
+        ORDER BY telegram_id,data_hora DESC
+    ) latest
+    JOIN membros m ON m.telegram_id=latest.telegram_id
+    LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+    WHERE COALESCE(ma.ativo, TRUE)
     """)
     d = sorted(cur.fetchall(), key=lambda x: x[2], reverse=True)
     txt = "🏆 RANKING XP\n\n"
@@ -1202,12 +1266,17 @@ def ranking_status(campo, titulo):
 
     cur.execute(f"""
 
-        SELECT DISTINCT ON (telegram_id)
-               nome,
-               {campo}
-        FROM status
-        WHERE {campo} IS NOT NULL
-        ORDER BY telegram_id, data_hora DESC
+        SELECT latest.nome, latest.valor
+        FROM (
+            SELECT DISTINCT ON (telegram_id)
+                   telegram_id, nome, {campo} AS valor
+            FROM status
+            WHERE {campo} IS NOT NULL
+            ORDER BY telegram_id, data_hora DESC
+        ) latest
+        JOIN membros m ON m.telegram_id=latest.telegram_id
+        LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+        WHERE COALESCE(ma.ativo, TRUE)
     """)
 
     dados = cur.fetchall()
@@ -1228,9 +1297,12 @@ def ranking_xpdif():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT telegram_id, nome, xp, data_hora
-        FROM xp_logs
-        ORDER BY telegram_id, data_hora ASC
+        SELECT x.telegram_id, x.nome, x.xp, x.data_hora
+        FROM xp_logs x
+        JOIN membros m ON m.telegram_id=x.telegram_id
+        LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+        WHERE COALESCE(ma.ativo, TRUE)
+        ORDER BY x.telegram_id, x.data_hora ASC
     """)
 
     rows = cur.fetchall()
@@ -2004,7 +2076,6 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dados_gibby["itens_base"]
             )
 
-
             if dados_gibby["resultado"] == "SUCESSO":
 
                 if dados_gibby["nivel_destino"] == 1:
@@ -2084,6 +2155,7 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     nome = extrair_nome(texto)
+    classe = extrair_classe(texto)
     xp = extrair_xp(texto)
     xp_restante = extrair_xp_restante(texto)
     nivel = extrair_nivel(texto)
@@ -2099,7 +2171,14 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     tg_id = msg.from_user.id
-    if not registrar_membro(tg_id, nome):
+    if membro_inativo(tg_id):
+        await msg.reply_text(
+            "⚪ Seu cadastro está inativo. Procure um administrador da guilda "
+            "para reativá-lo; seu histórico continua preservado."
+        )
+        return
+
+    if not registrar_membro(tg_id, nome, msg.from_user.username, classe):
         await msg.reply_text(
             "⚠ Este personagem já está vinculado a outra conta do Telegram. "
             "Os dados não foram alterados. Procure um administrador para revisar o vínculo."
@@ -2185,12 +2264,15 @@ async def cmd_pvp(update, context):
 
     cur.execute("""
         SELECT
-            nome,
-            SUM(pvps)
-        FROM cacadas
-        GROUP BY nome
-        HAVING SUM(pvps) > 0
-        ORDER BY SUM(pvps) DESC
+            m.nome,
+            SUM(c.pvps)
+        FROM cacadas c
+        JOIN membros m ON m.telegram_id=c.telegram_id
+        LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+        WHERE COALESCE(ma.ativo, TRUE)
+        GROUP BY m.telegram_id, m.nome
+        HAVING SUM(c.pvps) > 0
+        ORDER BY SUM(c.pvps) DESC
         LIMIT 20
     """)
 
@@ -2496,17 +2578,20 @@ async def cmd_gibbyazar(update, context):
 
     cur.execute("""
         SELECT
-            nome,
+            m.nome,
             COUNT(*) AS martelos,
             SUM(
                 CASE
-                    WHEN resultado='SUCESSO'
+                    WHEN g.resultado='SUCESSO'
                     THEN 1
                     ELSE 0
                 END
             ) AS sucessos
-        FROM gibby_logs
-        GROUP BY nome
+        FROM gibby_logs g
+        JOIN membros m ON m.telegram_id=g.telegram_id
+        LEFT JOIN membro_administracao ma ON ma.telegram_id=m.telegram_id
+        WHERE COALESCE(ma.ativo, TRUE)
+        GROUP BY m.telegram_id, m.nome
         HAVING COUNT(*) >= 10
     """)
 
@@ -2816,6 +2901,22 @@ def nome_area_atlas(nome_mapa, codigo_area):
         return None
 
 
+async def editar_atlas_com_texto(alvo, texto, teclado=None):
+    """Troca uma página do Atlas por texto, removendo mídia da página anterior."""
+    if getattr(alvo.message, "photo", None):
+        bot = alvo.message.get_bot()
+        chat_id = alvo.message.chat_id
+        await alvo.message.delete()
+        await bot.send_message(
+            chat_id=chat_id,
+            text=texto,
+            reply_markup=teclado,
+        )
+        return
+
+    await alvo.edit_message_text(texto, reply_markup=teclado)
+
+
 async def mostrar_inicio_atlas(alvo, editar=False):
     cur = conn.cursor()
 
@@ -2836,7 +2937,7 @@ async def mostrar_inicio_atlas(alvo, editar=False):
         texto = "🗺️ ATLAS LEGENDS\n\nEscolha um mapa:"
 
         if editar:
-            await alvo.edit_message_text(texto, reply_markup=teclado)
+            await editar_atlas_com_texto(alvo, texto, teclado)
         else:
             await alvo.reply_text(texto, reply_markup=teclado)
     finally:
@@ -2912,7 +3013,7 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
             teclado = InlineKeyboardMarkup(linhas)
 
         if editar:
-            await alvo.edit_message_text(texto, reply_markup=teclado)
+            await editar_atlas_com_texto(alvo, texto, teclado)
         else:
             await alvo.reply_text(texto, reply_markup=teclado)
     finally:
@@ -2968,9 +3069,10 @@ async def mostrar_monstros_atlas(alvo, mapa_id, codigo_area):
             if monstros
             else "Nenhum monstro associado a esta área por enquanto."
         )
-        await alvo.edit_message_text(
+        await editar_atlas_com_texto(
+            alvo,
             f"👹 {titulo_area.upper()} — {nome_mapa.upper()}\n\n{instrucao}",
-            reply_markup=InlineKeyboardMarkup(linhas)
+            InlineKeyboardMarkup(linhas)
         )
     finally:
         cur.close()
@@ -3029,27 +3131,30 @@ async def mostrar_monstro_atlas(
         else:
             texto += f"🎁 Drops: {drops or 'a confirmar'}"
 
+        teclado = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "⬅️ Voltar aos monstros",
+                callback_data=f"atlas_t_{mapa_id}_{codigo_area}"
+            )],
+            [InlineKeyboardButton(
+                "🗺️ Todos os mapas", callback_data="atlas_inicio"
+            )]
+        ])
+
         if row_imagem:
             try:
-                await alvo.message.reply_photo(
-                    photo=row_imagem[0],
-                    caption=f"👹 {nome} — referência visual",
+                await alvo.edit_message_media(
+                    media=InputMediaPhoto(
+                        media=row_imagem[0],
+                        caption=texto,
+                    ),
+                    reply_markup=teclado,
                 )
+                return
             except Exception as erro:
                 print(f"Erro ao exibir imagem do monstro {monstro_id}: {erro}")
 
-        await alvo.edit_message_text(
-            texto,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton(
-                    "⬅️ Voltar aos monstros",
-                    callback_data=f"atlas_t_{mapa_id}_{codigo_area}"
-                )],
-                [InlineKeyboardButton(
-                    "🗺️ Todos os mapas", callback_data="atlas_inicio"
-                )]
-            ])
-        )
+        await editar_atlas_com_texto(alvo, texto, teclado)
     finally:
         cur.close()
 
@@ -3097,8 +3202,9 @@ async def callback_atlas(update, context):
                 query, int(monstro_id), int(mapa_id), codigo_area
             )
     except (ValueError, IndexError):
-        await query.edit_message_text(
-            "Não consegui abrir essa página do Atlas. Use /mapa novamente."
+        await editar_atlas_com_texto(
+            query,
+            "Não consegui abrir essa página do Atlas. Use /mapa novamente.",
         )
 
 
