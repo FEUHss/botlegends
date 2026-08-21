@@ -229,6 +229,7 @@ def inicializar_banco():
             nome TEXT NOT NULL,
             mapa_id BIGINT REFERENCES catalogo_mapas(id),
             tipo TEXT DEFAULT 'Monstro',
+            masmorra_nome TEXT,
             raridade TEXT,
             hp BIGINT,
             atk NUMERIC,
@@ -341,6 +342,10 @@ def inicializar_banco():
         for ddl in tabelas:
             cur.execute(ddl)
         cur.execute("""
+            ALTER TABLE catalogo_monstros
+            ADD COLUMN IF NOT EXISTS masmorra_nome TEXT
+        """)
+        cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_xp_progresso_telegram_data
             ON xp_progresso (telegram_id, data_hora DESC)
         """)
@@ -368,6 +373,10 @@ def inicializar_banco():
             CREATE INDEX IF NOT EXISTS idx_masmorra_monstro_andar
             ON masmorra_monstro_observacoes
                 (monstro_id, andar, observado_em DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_catalogo_monstro_masmorra
+            ON catalogo_monstros (mapa_id, tipo, masmorra_nome)
         """)
         cur.execute("""
             INSERT INTO membro_vinculos (telegram_id, nome)
@@ -1594,7 +1603,7 @@ def chave_relacao_drop(item_id, monstro_id, mapa_id, forma_obtencao):
     )
 
 
-def resolver_monstro_catalogo(cur, nome_detectado, mapa_id=None):
+def resolver_monstro_catalogo(cur, nome_detectado, mapa_id=None, tipo=None):
     if not nome_detectado:
         return None
 
@@ -1602,8 +1611,9 @@ def resolver_monstro_catalogo(cur, nome_detectado, mapa_id=None):
     cur.execute("""
         SELECT cm.id, cm.nome, cm.mapa_id
         FROM catalogo_monstros cm
+        WHERE (%s IS NULL OR LOWER(cm.tipo)=LOWER(%s))
         ORDER BY cm.ordem, cm.id
-    """)
+    """, (tipo, tipo))
     candidatos = [
         row for row in cur.fetchall()
         if normalizar(row[1]) == nome_normalizado
@@ -1615,7 +1625,8 @@ def resolver_monstro_catalogo(cur, nome_detectado, mapa_id=None):
             FROM monstro_aliases alias
             JOIN catalogo_monstros cm ON cm.id=alias.monstro_id
             WHERE alias.alias_normalizado=%s
-        """, (nome_normalizado,))
+              AND (%s IS NULL OR LOWER(cm.tipo)=LOWER(%s))
+        """, (nome_normalizado, tipo, tipo))
         candidatos = cur.fetchall()
 
     if mapa_id:
@@ -1643,13 +1654,14 @@ def resolver_monstro_por_imagem(cur, msg):
     return cur.fetchone()
 
 
-def candidatos_monstro_semelhante(cur, nome_detectado):
+def candidatos_monstro_semelhante(cur, nome_detectado, tipo=None):
     procurado = normalizar(nome_detectado)
     cur.execute("""
         SELECT id, nome, mapa_id
         FROM catalogo_monstros
+        WHERE (%s IS NULL OR LOWER(tipo)=LOWER(%s))
         ORDER BY ordem, id
-    """)
+    """, (tipo, tipo))
     return [
         row for row in cur.fetchall()
         if normalizar(row[1]) in procurado or procurado in normalizar(row[1])
@@ -1685,10 +1697,14 @@ async def processar_imagem_monstro_masmorra(msg, dados):
             return True
 
         mapa_id, nome_mapa = mapa
-        monstro = resolver_monstro_catalogo(cur, dados["nome"], mapa_id)
+        monstro = resolver_monstro_catalogo(
+            cur, dados["nome"], mapa_id, tipo="Masmorra"
+        )
         if not monstro:
             semelhantes = [
-                row for row in candidatos_monstro_semelhante(cur, dados["nome"])
+                row for row in candidatos_monstro_semelhante(
+                    cur, dados["nome"], tipo="Masmorra"
+                )
                 if row[2] == mapa_id
             ]
             if len(semelhantes) == 1:
@@ -1707,9 +1723,10 @@ async def processar_imagem_monstro_masmorra(msg, dados):
                 proxima_ordem = cur.fetchone()[0]
                 cur.execute("""
                     INSERT INTO catalogo_monstros
-                        (ordem, nome, mapa_id, tipo, raridade, fonte,
+                        (ordem, nome, mapa_id, tipo, masmorra_nome,
+                         raridade, fonte,
                          confirmado, atualizado_em)
-                    VALUES (%s, %s, %s, 'Masmorra', %s,
+                    VALUES (%s, %s, %s, 'Masmorra', %s, %s,
                             'Mensagem oficial do Teletofus', TRUE,
                             CURRENT_TIMESTAMP)
                     RETURNING id, nome, mapa_id
@@ -1717,12 +1734,24 @@ async def processar_imagem_monstro_masmorra(msg, dados):
                     proxima_ordem,
                     dados["nome"],
                     mapa_id,
+                    dados["masmorra"],
                     "Boss" if dados["boss"] else "Subboss",
                 ))
                 monstro = cur.fetchone()
 
         monstro_id, nome_catalogo, _ = monstro
         nome_recebido = dados["nome"].strip()
+        cur.execute("""
+            UPDATE catalogo_monstros
+            SET masmorra_nome=%s,
+                raridade=CASE
+                    WHEN %s THEN 'Boss'
+                    WHEN LOWER(COALESCE(raridade, '')) <> 'boss' THEN 'Subboss'
+                    ELSE raridade
+                END,
+                atualizado_em=CURRENT_TIMESTAMP
+            WHERE id=%s
+        """, (dados["masmorra"], dados["boss"], monstro_id))
         if normalizar(nome_catalogo) != normalizar(nome_recebido):
             cur.execute("""
                 INSERT INTO monstro_aliases
@@ -2222,12 +2251,12 @@ async def callback_revisao_loot(update, context):
         cur.close()
 
 
-def codigo_area_monstro_atlas(nome_mapa, tipo):
+def codigo_area_monstro_atlas(nome_mapa, tipo, nome_masmorra=None):
     if (tipo or "").lower() != "masmorra":
         return "c"
 
     masmorras = masmorras_do_mapa_atlas(nome_mapa)
-    destino = MASMORRA_DOS_MONSTROS.get(nome_mapa)
+    destino = nome_masmorra or MASMORRA_DOS_MONSTROS.get(nome_mapa)
     if destino in masmorras:
         return f"d{masmorras.index(destino)}"
     return "d0"
@@ -2258,7 +2287,8 @@ async def processar_busca_biblioteca(update, context):
         itens = cur.fetchall()
 
         cur.execute("""
-            SELECT cm.id, cm.nome, cm.mapa_id, mp.nome, cm.tipo
+            SELECT cm.id, cm.nome, cm.mapa_id, mp.nome, cm.tipo,
+                   cm.masmorra_nome
             FROM catalogo_monstros cm
             JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
             WHERE cm.nome ILIKE %s
@@ -2284,8 +2314,8 @@ async def processar_busca_biblioteca(update, context):
             f"🎒 {nome}",
             callback_data=f"item_{item_id}_{classe}_{categoria}",
         )])
-    for monstro_id, nome, mapa_id, mapa, tipo in monstros:
-        area = codigo_area_monstro_atlas(mapa, tipo)
+    for monstro_id, nome, mapa_id, mapa, tipo, masmorra in monstros:
+        area = codigo_area_monstro_atlas(mapa, tipo, masmorra)
         linhas.append([InlineKeyboardButton(
             f"👹 {nome} — {mapa}",
             callback_data=f"atlas_x_{monstro_id}_{mapa_id}_{area}",
@@ -3458,6 +3488,14 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
             total_cacada, total_masmorra = cur.fetchone()
 
             cur.execute("""
+                SELECT masmorra_nome, COUNT(*)
+                FROM catalogo_monstros
+                WHERE mapa_id=%s AND LOWER(tipo)=LOWER('Masmorra')
+                GROUP BY masmorra_nome
+            """, (mapa_id,))
+            contagem_masmorras = dict(cur.fetchall())
+
+            cur.execute("""
                 SELECT COUNT(DISTINCT item_id)
                 FROM (
                     SELECT id AS item_id
@@ -3486,11 +3524,9 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
             )])
             masmorra_com_monstros = MASMORRA_DOS_MONSTROS.get(nome)
             for indice, nome_masmorra in enumerate(masmorras_do_mapa_atlas(nome)):
-                quantidade = (
-                    total_masmorra
-                    if nome_masmorra == masmorra_com_monstros
-                    else 0
-                )
+                quantidade = contagem_masmorras.get(nome_masmorra, 0)
+                if nome_masmorra == masmorra_com_monstros:
+                    quantidade += contagem_masmorras.get(None, 0)
                 linhas.append([InlineKeyboardButton(
                     f"🗝️ {nome_masmorra} ({quantidade})",
                     callback_data=f"atlas_t_{mapa_id}_d{indice}"
@@ -3523,21 +3559,33 @@ async def mostrar_monstros_atlas(alvo, mapa_id, codigo_area):
             await mostrar_mapa_atlas(alvo, mapa_id, editar=True)
             return
 
-        consultar_monstros = (
-            codigo_area == "c"
-            or titulo_area == MASMORRA_DOS_MONSTROS.get(nome_mapa)
-        )
-        if consultar_monstros:
-            tipo = "Caçada" if codigo_area == "c" else "Masmorra"
+        if codigo_area == "c":
             cur.execute("""
                 SELECT ordem, id, nome
                 FROM catalogo_monstros
-                WHERE mapa_id=%s AND LOWER(tipo)=LOWER(%s)
+                WHERE mapa_id=%s AND LOWER(tipo)=LOWER('Caçada')
                 ORDER BY ordem, id
-            """, (mapa_id, tipo))
+            """, (mapa_id,))
             monstros = cur.fetchall()
         else:
-            monstros = []
+            masmorra_legada = MASMORRA_DOS_MONSTROS.get(nome_mapa)
+            cur.execute("""
+                SELECT ordem, id, nome
+                FROM catalogo_monstros
+                WHERE mapa_id=%s
+                  AND LOWER(tipo)=LOWER('Masmorra')
+                  AND (
+                      masmorra_nome=%s
+                      OR (masmorra_nome IS NULL AND %s=%s)
+                  )
+                ORDER BY ordem, id
+            """, (
+                mapa_id,
+                titulo_area,
+                titulo_area,
+                masmorra_legada,
+            ))
+            monstros = cur.fetchall()
 
         botoes = [
             InlineKeyboardButton(

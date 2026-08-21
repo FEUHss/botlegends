@@ -46,6 +46,21 @@ Senhor dos Rochedos
         self.assertEqual(resultado["andar"], 4)
         self.assertTrue(resultado["boss"])
 
+    def test_mesmo_subboss_pode_ter_hp_diferente_no_segundo_andar(self):
+        texto = """🗝 MASMORRA DA PLANÍCIE  Sala: 2/4 🗝
+Lobo Alfa da Masmorra
+❤️ HP: 291 / 291  ID: 3F00C9
+👥 Grupo ⚔ 34 🛡 89
+🧙 O Rastreador (Líder) — Nv. 45
+🧙 EremitaDeSantoBerço — Nv. 46"""
+
+        resultado = extrair_monstro_masmorra(texto)
+
+        self.assertEqual(resultado["andar"], 2)
+        self.assertEqual(resultado["hp_max"], 291)
+        self.assertEqual(resultado["nome"], "Lobo Alfa da Masmorra")
+        self.assertFalse(resultado["boss"])
+
     def test_combate_de_cacada_continua_compativel(self):
         texto = """⚔ COMBATE INICIADO
 🧟 Slime Viscoso
