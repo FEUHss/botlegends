@@ -2906,12 +2906,21 @@ async def editar_atlas_com_texto(alvo, texto, teclado=None):
     if getattr(alvo.message, "photo", None):
         bot = alvo.message.get_bot()
         chat_id = alvo.message.chat_id
-        await alvo.message.delete()
+        # O Telegram não permite converter uma mensagem com mídia em texto puro.
+        # Envie primeiro a próxima página para evitar a tela vazia/animação com
+        # atraso; remova a foto antiga somente depois que a navegação já estiver
+        # disponível ao usuário.
         await bot.send_message(
             chat_id=chat_id,
             text=texto,
             reply_markup=teclado,
         )
+        try:
+            await alvo.message.delete()
+        except Exception as erro:
+            # A nova página já está funcional. Uma falha ao limpar a anterior
+            # não deve interromper o Atlas nem invalidar seus botões.
+            print(f"Erro ao remover página antiga com mídia do Atlas: {erro}")
         return
 
     await alvo.edit_message_text(texto, reply_markup=teclado)
