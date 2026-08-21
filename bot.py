@@ -1,19 +1,23 @@
 import os
 import re
 import random
+import hashlib
 import psycopg2
 import pytz
 from datetime import datetime, timedelta
+from pathlib import Path
 from loot_parser import (
     analisar_texto_loot,
     chave_origem_drop,
     extrair_monstro_combate,
+    extrair_monstro_masmorra,
     normalizar,
 )
 from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputFile,
     InputMediaPhoto
 )
 from telegram.ext import (
@@ -27,6 +31,14 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+BASE_DIR = Path(__file__).resolve().parent
+BIBLIOTECA_ASSETS = {
+    "biblioteca": BASE_DIR / "assets" / "library-cover.jpg",
+    "atlas": BASE_DIR / "assets" / "atlas-cover.jpg",
+    "itens": BASE_DIR / "assets" / "items-cover.jpg",
+    "desconhecido": BASE_DIR / "assets" / "unknown-cover.jpg",
+}
 
 # Somente este usuário recebe e decide as propostas encontradas em LOOTS.
 LOOT_REVIEWER_ID = int(os.getenv("LOOT_REVIEWER_ID", "5285053532"))
@@ -285,6 +297,42 @@ def inicializar_banco():
             hp_detectado BIGINT,
             atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS item_imagens (
+            id BIGSERIAL PRIMARY KEY,
+            item_id BIGINT NOT NULL REFERENCES itens_legends(id),
+            telegram_file_id TEXT NOT NULL,
+            telegram_file_unique_id TEXT UNIQUE NOT NULL,
+            nome_detectado TEXT NOT NULL,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS biblioteca_midias (
+            chave TEXT PRIMARY KEY,
+            telegram_file_id TEXT NOT NULL,
+            telegram_file_unique_id TEXT UNIQUE NOT NULL,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS masmorra_monstro_observacoes (
+            id BIGSERIAL PRIMARY KEY,
+            chave_unica TEXT UNIQUE NOT NULL,
+            monstro_id BIGINT NOT NULL REFERENCES catalogo_monstros(id),
+            mapa_id BIGINT NOT NULL REFERENCES catalogo_mapas(id),
+            masmorra TEXT NOT NULL,
+            andar INTEGER NOT NULL,
+            total_andares INTEGER NOT NULL,
+            boss BOOLEAN NOT NULL DEFAULT FALSE,
+            hp_atual BIGINT,
+            hp_max BIGINT,
+            tamanho_grupo INTEGER,
+            codigo_execucao TEXT,
+            telegram_message_id BIGINT,
+            observado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
         """
     ]
 
@@ -311,6 +359,15 @@ def inicializar_banco():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_item_drop_mapa
             ON item_drop_relacoes (mapa_id)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_item_imagens_item
+            ON item_imagens (item_id, atualizado_em DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_masmorra_monstro_andar
+            ON masmorra_monstro_observacoes
+                (monstro_id, andar, observado_em DESC)
         """)
         cur.execute("""
             INSERT INTO membro_vinculos (telegram_id, nome)
@@ -1599,6 +1656,186 @@ def candidatos_monstro_semelhante(cur, nome_detectado):
     ]
 
 
+def resolver_mapa_da_masmorra(cur, nome_masmorra):
+    procurado = normalizar(nome_masmorra)
+    nome_mapa = next((
+        mapa
+        for mapa, masmorras in MASMORRAS_POR_MAPA.items()
+        if any(normalizar(nome) == procurado for nome in masmorras)
+    ), None)
+    if not nome_mapa:
+        return None
+
+    cur.execute(
+        "SELECT id, nome FROM catalogo_mapas WHERE nome=%s",
+        (nome_mapa,),
+    )
+    return cur.fetchone()
+
+
+async def processar_imagem_monstro_masmorra(msg, dados):
+    cur = conn.cursor()
+    try:
+        mapa = resolver_mapa_da_masmorra(cur, dados["masmorra"])
+        if not mapa:
+            await msg.reply_text(
+                "⚠️ A masmorra desta mensagem ainda não está associada "
+                "a um mapa do Atlas. A imagem não foi salva."
+            )
+            return True
+
+        mapa_id, nome_mapa = mapa
+        monstro = resolver_monstro_catalogo(cur, dados["nome"], mapa_id)
+        if not monstro:
+            semelhantes = [
+                row for row in candidatos_monstro_semelhante(cur, dados["nome"])
+                if row[2] == mapa_id
+            ]
+            if len(semelhantes) == 1:
+                monstro = semelhantes[0]
+            elif semelhantes:
+                nomes = ", ".join(row[1] for row in semelhantes[:6])
+                await msg.reply_text(
+                    "⚠️ Encontrei mais de um monstro parecido nesta região.\n\n"
+                    f"Nome recebido: {dados['nome']}\n"
+                    f"Candidatos: {nomes}\n\n"
+                    "A imagem não foi salva."
+                )
+                return True
+            else:
+                cur.execute("SELECT COALESCE(MAX(ordem), 0) + 1 FROM catalogo_monstros")
+                proxima_ordem = cur.fetchone()[0]
+                cur.execute("""
+                    INSERT INTO catalogo_monstros
+                        (ordem, nome, mapa_id, tipo, raridade, fonte,
+                         confirmado, atualizado_em)
+                    VALUES (%s, %s, %s, 'Masmorra', %s,
+                            'Mensagem oficial do Teletofus', TRUE,
+                            CURRENT_TIMESTAMP)
+                    RETURNING id, nome, mapa_id
+                """, (
+                    proxima_ordem,
+                    dados["nome"],
+                    mapa_id,
+                    "Boss" if dados["boss"] else "Subboss",
+                ))
+                monstro = cur.fetchone()
+
+        monstro_id, nome_catalogo, _ = monstro
+        nome_recebido = dados["nome"].strip()
+        if normalizar(nome_catalogo) != normalizar(nome_recebido):
+            cur.execute("""
+                INSERT INTO monstro_aliases
+                    (alias_normalizado, alias, monstro_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (alias_normalizado) DO UPDATE SET
+                    alias=EXCLUDED.alias,
+                    monstro_id=EXCLUDED.monstro_id
+            """, (normalizar(nome_catalogo), nome_catalogo, monstro_id))
+            cur.execute("""
+                UPDATE catalogo_monstros
+                SET nome=%s, atualizado_em=CURRENT_TIMESTAMP
+                WHERE id=%s
+            """, (nome_recebido, monstro_id))
+
+        foto = msg.photo[-1]
+        cur.execute("""
+            INSERT INTO monstro_imagens
+                (monstro_id, telegram_file_id, telegram_file_unique_id,
+                 nome_detectado, hp_detectado)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (telegram_file_unique_id) DO UPDATE SET
+                monstro_id=EXCLUDED.monstro_id,
+                telegram_file_id=EXCLUDED.telegram_file_id,
+                nome_detectado=EXCLUDED.nome_detectado,
+                hp_detectado=EXCLUDED.hp_detectado,
+                atualizado_em=CURRENT_TIMESTAMP
+        """, (
+            monstro_id,
+            foto.file_id,
+            foto.file_unique_id,
+            nome_recebido,
+            dados["hp_max"],
+        ))
+
+        partes_chave = (
+            monstro_id,
+            normalizar(dados["masmorra"]),
+            dados["andar"],
+            dados["hp_max"],
+            dados["tamanho_grupo"],
+            dados["codigo_execucao"],
+            foto.file_unique_id,
+        )
+        chave = hashlib.sha256(
+            "|".join(str(parte or "") for parte in partes_chave).encode()
+        ).hexdigest()
+        cur.execute("""
+            INSERT INTO masmorra_monstro_observacoes
+                (chave_unica, monstro_id, mapa_id, masmorra, andar,
+                 total_andares, boss, hp_atual, hp_max, tamanho_grupo,
+                 codigo_execucao, telegram_message_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chave_unica) DO NOTHING
+        """, (
+            chave,
+            monstro_id,
+            mapa_id,
+            dados["masmorra"],
+            dados["andar"],
+            dados["total_andares"],
+            dados["boss"],
+            dados["hp_atual"],
+            dados["hp_max"],
+            dados["tamanho_grupo"],
+            dados["codigo_execucao"],
+            msg.message_id,
+        ))
+
+        cur.execute("""
+            SELECT andar, MIN(hp_max), MAX(hp_max), COUNT(*)
+            FROM masmorra_monstro_observacoes
+            WHERE monstro_id=%s AND hp_max IS NOT NULL
+            GROUP BY andar
+            ORDER BY andar
+        """, (monstro_id,))
+        observacoes = cur.fetchall()
+        conn.commit()
+
+        hp_por_andar = {andar: (minimo, maximo, total)
+                        for andar, minimo, maximo, total in observacoes}
+        linhas_hp = []
+        limite = dados["total_andares"] if dados["boss"] else 3
+        inicio = dados["total_andares"] if dados["boss"] else 1
+        for andar in range(inicio, limite + 1):
+            valores = hp_por_andar.get(andar)
+            if not valores:
+                valor = "ainda não observado"
+            elif valores[0] == valores[1]:
+                valor = str(valores[0])
+            else:
+                valor = f"{valores[0]}–{valores[1]}"
+            rotulo = "Boss" if andar == dados["total_andares"] else f"{andar}º andar"
+            linhas_hp.append(f"• {rotulo}: {valor}")
+
+        await msg.reply_text(
+            f"✅ Imagem salva para {nome_recebido}.\n"
+            f"🗺️ {nome_mapa} — {dados['masmorra']}\n"
+            f"🏰 Sala observada: {dados['andar']}/{dados['total_andares']}\n"
+            "❤️ HP observado:\n" + "\n".join(linhas_hp)
+        )
+        return True
+    except Exception as erro:
+        conn.rollback()
+        print(f"Erro ao cadastrar monstro de masmorra: {erro}")
+        await msg.reply_text(
+            "⚠️ Não consegui salvar esta observação de masmorra."
+        )
+        return True
+    finally:
+        cur.close()
+
+
 async def processar_imagem_monstro(msg):
     if (
         msg.chat.type != "private"
@@ -1609,7 +1846,12 @@ async def processar_imagem_monstro(msg):
     ):
         return False
 
-    dados = extrair_monstro_combate(msg.caption or msg.text or "")
+    texto = msg.caption or msg.text or ""
+    dados_masmorra = extrair_monstro_masmorra(texto)
+    if dados_masmorra:
+        return await processar_imagem_monstro_masmorra(msg, dados_masmorra)
+
+    dados = extrair_monstro_combate(texto)
     if not dados:
         return False
 
@@ -1980,6 +2222,107 @@ async def callback_revisao_loot(update, context):
         cur.close()
 
 
+def codigo_area_monstro_atlas(nome_mapa, tipo):
+    if (tipo or "").lower() != "masmorra":
+        return "c"
+
+    masmorras = masmorras_do_mapa_atlas(nome_mapa)
+    destino = MASMORRA_DOS_MONSTROS.get(nome_mapa)
+    if destino in masmorras:
+        return f"d{masmorras.index(destino)}"
+    return "d0"
+
+
+async def processar_busca_biblioteca(update, context):
+    mensagem_id = context.user_data.get("biblioteca_busca_msg_id")
+    if not mensagem_id or update.effective_chat.type != "private":
+        return False
+
+    termo = (update.message.text or "").strip()[:60]
+    if len(termo) < 2:
+        await update.message.reply_text(
+            "Digite pelo menos duas letras para pesquisar."
+        )
+        return True
+
+    cur = conn.cursor()
+    try:
+        padrao = f"%{termo}%"
+        cur.execute("""
+            SELECT id, nome, classe, categoria
+            FROM itens_legends
+            WHERE nome ILIKE %s
+            ORDER BY nome
+            LIMIT 6
+        """, (padrao,))
+        itens = cur.fetchall()
+
+        cur.execute("""
+            SELECT cm.id, cm.nome, cm.mapa_id, mp.nome, cm.tipo
+            FROM catalogo_monstros cm
+            JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
+            WHERE cm.nome ILIKE %s
+            ORDER BY cm.nome
+            LIMIT 6
+        """, (padrao,))
+        monstros = cur.fetchall()
+
+        cur.execute("""
+            SELECT id, nome
+            FROM catalogo_mapas
+            WHERE nome ILIKE %s
+            ORDER BY ordem, id
+            LIMIT 4
+        """, (padrao,))
+        mapas = cur.fetchall()
+    finally:
+        cur.close()
+
+    linhas = []
+    for item_id, nome, classe, categoria in itens:
+        linhas.append([InlineKeyboardButton(
+            f"🎒 {nome}",
+            callback_data=f"item_{item_id}_{classe}_{categoria}",
+        )])
+    for monstro_id, nome, mapa_id, mapa, tipo in monstros:
+        area = codigo_area_monstro_atlas(mapa, tipo)
+        linhas.append([InlineKeyboardButton(
+            f"👹 {nome} — {mapa}",
+            callback_data=f"atlas_x_{monstro_id}_{mapa_id}_{area}",
+        )])
+    for mapa_id, nome in mapas:
+        linhas.append([InlineKeyboardButton(
+            f"🗺️ {nome}", callback_data=f"atlas_m_{mapa_id}"
+        )])
+    linhas.append([InlineKeyboardButton(
+        "⬅ Biblioteca", callback_data="lib_inicio"
+    )])
+
+    total = len(itens) + len(monstros) + len(mapas)
+    texto = (
+        f"🔎 BUSCA — {termo}\n\n"
+        + (f"Encontrados: {total}" if total else "Nenhum resultado encontrado.")
+    )
+    context.user_data.pop("biblioteca_busca_msg_id", None)
+
+    try:
+        await context.bot.edit_message_caption(
+            chat_id=update.effective_chat.id,
+            message_id=mensagem_id,
+            caption=texto,
+            reply_markup=InlineKeyboardMarkup(linhas),
+        )
+    except Exception as erro:
+        print(f"Erro ao atualizar resultado da busca: {erro}")
+        await enviar_pagina_biblioteca(
+            update.message,
+            "biblioteca",
+            texto,
+            InlineKeyboardMarkup(linhas),
+        )
+    return True
+
+
 async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = update.message
@@ -1990,6 +2333,9 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = msg.text or msg.caption
 
     if not texto:
+        return
+
+    if await processar_busca_biblioteca(update, context):
         return
 
     if await processar_imagem_monstro(msg):
@@ -2827,6 +3173,154 @@ def formatar_valor_catalogo(valor):
     return str(valor)
 
 
+def limitar_legenda_biblioteca(texto, limite=1000):
+    """Mantém uma margem segura dentro do limite de legendas do Telegram."""
+    if len(texto) <= limite:
+        return texto
+
+    aviso = "\n\nℹ️ Conteúdo resumido para caber nesta página."
+    disponivel = limite - len(aviso)
+    linhas = []
+    tamanho = 0
+    for linha in texto.splitlines():
+        adicional = len(linha) + (1 if linhas else 0)
+        if tamanho + adicional > disponivel:
+            break
+        linhas.append(linha)
+        tamanho += adicional
+    return "\n".join(linhas).rstrip() + aviso
+
+
+def midia_biblioteca_salva(chave):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT telegram_file_id, telegram_file_unique_id
+            FROM biblioteca_midias
+            WHERE chave=%s
+        """, (chave,))
+        return cur.fetchone()
+    finally:
+        cur.close()
+
+
+def salvar_midia_biblioteca(chave, mensagem):
+    if not mensagem or not getattr(mensagem, "photo", None):
+        return
+
+    foto = mensagem.photo[-1]
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO biblioteca_midias
+                (chave, telegram_file_id, telegram_file_unique_id, atualizado_em)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (chave) DO UPDATE SET
+                telegram_file_id=EXCLUDED.telegram_file_id,
+                telegram_file_unique_id=EXCLUDED.telegram_file_unique_id,
+                atualizado_em=CURRENT_TIMESTAMP
+        """, (chave, foto.file_id, foto.file_unique_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+async def enviar_pagina_biblioteca(mensagem, chave_midia, texto, teclado=None):
+    texto = limitar_legenda_biblioteca(texto)
+    midia = midia_biblioteca_salva(chave_midia)
+
+    if midia:
+        resposta = await mensagem.reply_photo(
+            photo=midia[0], caption=texto, reply_markup=teclado
+        )
+    else:
+        caminho = BIBLIOTECA_ASSETS[chave_midia]
+        with caminho.open("rb") as arquivo:
+            resposta = await mensagem.reply_photo(
+                photo=InputFile(arquivo), caption=texto, reply_markup=teclado
+            )
+        salvar_midia_biblioteca(chave_midia, resposta)
+
+    return resposta
+
+
+async def editar_pagina_biblioteca(
+    query, chave_midia, texto, teclado=None, file_id=None, file_unique_id=None
+):
+    """Navega sempre entre mensagens com foto, sem apagar a página atual."""
+    texto = limitar_legenda_biblioteca(texto)
+    mensagem = query.message
+
+    if file_id:
+        midia_id = file_id
+        unica_id = file_unique_id
+    else:
+        midia = midia_biblioteca_salva(chave_midia)
+        midia_id = midia[0] if midia else None
+        unica_id = midia[1] if midia else None
+
+    foto_atual = mensagem.photo[-1] if getattr(mensagem, "photo", None) else None
+    if foto_atual and unica_id and foto_atual.file_unique_id == unica_id:
+        return await query.edit_message_caption(
+            caption=texto, reply_markup=teclado
+        )
+
+    if foto_atual:
+        if midia_id:
+            resposta = await query.edit_message_media(
+                media=InputMediaPhoto(media=midia_id, caption=texto),
+                reply_markup=teclado,
+            )
+        else:
+            caminho = BIBLIOTECA_ASSETS[chave_midia]
+            with caminho.open("rb") as arquivo:
+                resposta = await query.edit_message_media(
+                    media=InputMediaPhoto(
+                        media=InputFile(arquivo), caption=texto
+                    ),
+                    reply_markup=teclado,
+                )
+            salvar_midia_biblioteca(chave_midia, resposta)
+        return resposta
+
+    # Compatibilidade com botões de mensagens antigas, anteriores à navegação
+    # unificada: cria a nova página antes de remover a mensagem de texto.
+    resposta = await enviar_pagina_biblioteca(
+        mensagem, chave_midia, texto, teclado
+    )
+    try:
+        await mensagem.delete()
+    except Exception as erro:
+        print(f"Erro ao limpar página antiga da Biblioteca: {erro}")
+    return resposta
+
+
+def teclado_inicio_unificado():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗺️ Atlas", callback_data="lib_atlas")],
+        [InlineKeyboardButton("🎒 Itens", callback_data="lib_itens")],
+        [InlineKeyboardButton("🔎 Buscar", callback_data="lib_buscar")],
+    ])
+
+
+async def mostrar_inicio_unificado(alvo, editar=False):
+    texto = (
+        "📚 BIBLIOTECA LEGENDS\n\n"
+        "Explore os mapas, monstros e itens catalogados pela guilda."
+    )
+    if editar:
+        await editar_pagina_biblioteca(
+            alvo, "biblioteca", texto, teclado_inicio_unificado()
+        )
+    else:
+        await enviar_pagina_biblioteca(
+            alvo, "biblioteca", texto, teclado_inicio_unificado()
+        )
+
+
 async def cmd_mapa(update, context):
     if not await validar_acesso(update, context, "/mapa"):
         return
@@ -2902,28 +3396,7 @@ def nome_area_atlas(nome_mapa, codigo_area):
 
 
 async def editar_atlas_com_texto(alvo, texto, teclado=None):
-    """Troca uma página do Atlas por texto, removendo mídia da página anterior."""
-    if getattr(alvo.message, "photo", None):
-        bot = alvo.message.get_bot()
-        chat_id = alvo.message.chat_id
-        # O Telegram não permite converter uma mensagem com mídia em texto puro.
-        # Envie primeiro a próxima página para evitar a tela vazia/animação com
-        # atraso; remova a foto antiga somente depois que a navegação já estiver
-        # disponível ao usuário.
-        await bot.send_message(
-            chat_id=chat_id,
-            text=texto,
-            reply_markup=teclado,
-        )
-        try:
-            await alvo.message.delete()
-        except Exception as erro:
-            # A nova página já está funcional. Uma falha ao limpar a anterior
-            # não deve interromper o Atlas nem invalidar seus botões.
-            print(f"Erro ao remover página antiga com mídia do Atlas: {erro}")
-        return
-
-    await alvo.edit_message_text(texto, reply_markup=teclado)
+    await editar_pagina_biblioteca(alvo, "atlas", texto, teclado)
 
 
 async def mostrar_inicio_atlas(alvo, editar=False):
@@ -2942,13 +3415,19 @@ async def mostrar_inicio_atlas(alvo, editar=False):
             )
             for mapa_id, nome in mapas
         ]
-        teclado = InlineKeyboardMarkup(agrupar_botoes_atlas(botoes))
+        linhas = agrupar_botoes_atlas(botoes)
+        linhas.append([
+            InlineKeyboardButton(
+                "⬅️ Biblioteca", callback_data="lib_inicio"
+            )
+        ])
+        teclado = InlineKeyboardMarkup(linhas)
         texto = "🗺️ ATLAS LEGENDS\n\nEscolha um mapa:"
 
         if editar:
             await editar_atlas_com_texto(alvo, texto, teclado)
         else:
-            await alvo.reply_text(texto, reply_markup=teclado)
+            await enviar_pagina_biblioteca(alvo, "atlas", texto, teclado)
     finally:
         cur.close()
 
@@ -3024,7 +3503,7 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
         if editar:
             await editar_atlas_com_texto(alvo, texto, teclado)
         else:
-            await alvo.reply_text(texto, reply_markup=teclado)
+            await enviar_pagina_biblioteca(alvo, "atlas", texto, teclado)
     finally:
         cur.close()
 
@@ -3115,7 +3594,7 @@ async def mostrar_monstro_atlas(
         """, (monstro_id,))
         drops_relacionados = [linha[0] for linha in cur.fetchall()]
         cur.execute("""
-            SELECT telegram_file_id
+            SELECT telegram_file_id, telegram_file_unique_id
             FROM monstro_imagens
             WHERE monstro_id=%s
             ORDER BY atualizado_em DESC
@@ -3123,16 +3602,50 @@ async def mostrar_monstro_atlas(
         """, (monstro_id,))
         row_imagem = cur.fetchone()
 
+        observacoes_hp = []
+        if (tipo or "").lower() == "masmorra":
+            cur.execute("""
+                SELECT andar, MIN(hp_max), MAX(hp_max), COUNT(*)
+                FROM masmorra_monstro_observacoes
+                WHERE monstro_id=%s AND hp_max IS NOT NULL
+                GROUP BY andar
+                ORDER BY andar
+            """, (monstro_id,))
+            observacoes_hp = cur.fetchall()
+
+        hp_principal = (
+            "varia por andar"
+            if observacoes_hp
+            else formatar_valor_catalogo(hp)
+        )
+
         texto = (
             f"👹 MONSTRO {ordem} — {nome}\n\n"
             f"🗺️ {mapa}   🏷️ {tipo or 'a confirmar'}   "
             f"💠 {raridade or 'a confirmar'}\n"
-            f"❤️ HP: {formatar_valor_catalogo(hp)}   "
+            f"❤️ HP: {hp_principal}   "
             f"⚔️ ATK: {formatar_valor_catalogo(atk)}   "
             f"🛡️ DEF: {formatar_valor_catalogo(defesa)}\n"
             f"⭐ XP: {formatar_valor_catalogo(xp)}   "
             f"💰 Gold: {formatar_valor_catalogo(gold)}\n"
         )
+        if (tipo or "").lower() == "masmorra":
+            hp_por_andar = {
+                andar: (minimo, maximo)
+                for andar, minimo, maximo, _ in observacoes_hp
+            }
+            andares = [4] if (raridade or "").lower() == "boss" else [1, 2, 3]
+            texto += "❤️ HP observado na masmorra:\n"
+            for andar in andares:
+                valores = hp_por_andar.get(andar)
+                if not valores:
+                    valor = "ainda não observado"
+                elif valores[0] == valores[1]:
+                    valor = str(valores[0])
+                else:
+                    valor = f"{valores[0]}–{valores[1]}"
+                rotulo = "Boss" if andar == 4 else f"{andar}º andar"
+                texto += f"• {rotulo}: {valor}\n"
         if drops_relacionados:
             texto += "🎁 Drops: " + ", ".join(drops_relacionados[:6])
             if len(drops_relacionados) > 6:
@@ -3152,18 +3665,21 @@ async def mostrar_monstro_atlas(
 
         if row_imagem:
             try:
-                await alvo.edit_message_media(
-                    media=InputMediaPhoto(
-                        media=row_imagem[0],
-                        caption=texto,
-                    ),
-                    reply_markup=teclado,
+                await editar_pagina_biblioteca(
+                    alvo,
+                    "desconhecido",
+                    texto,
+                    teclado,
+                    file_id=row_imagem[0],
+                    file_unique_id=row_imagem[1],
                 )
                 return
             except Exception as erro:
                 print(f"Erro ao exibir imagem do monstro {monstro_id}: {erro}")
 
-        await editar_atlas_com_texto(alvo, texto, teclado)
+        await editar_pagina_biblioteca(
+            alvo, "desconhecido", texto, teclado
+        )
     finally:
         cur.close()
 
@@ -3306,6 +3822,14 @@ async def cmd_monstro(update, context):
 
 async def cmd_start(update, context):
 
+    if context.args and context.args[0] in {"lib", "biblioteca"}:
+
+        if not await validar_acesso(update, context, "/biblioteca"):
+            return
+
+        await mostrar_inicio_unificado(update.message)
+        return
+
     if context.args and context.args[0] == "atlas":
 
         if not await validar_acesso(update, context, "/mapa"):
@@ -3316,10 +3840,12 @@ async def cmd_start(update, context):
 
     if context.args and context.args[0] == "item":
 
-        await update.message.reply_text(
+        await enviar_pagina_biblioteca(
+            update.message,
+            "itens",
             "📚 BIBLIOTECA LEGENDS\n\n"
             "Escolha uma categoria:",
-            reply_markup=teclado_inicio_biblioteca()
+            teclado_inicio_biblioteca()
         )
 
 
@@ -3328,6 +3854,31 @@ async def cmd_start(update, context):
     await update.message.reply_text(
         "Olá! Use os comandos disponíveis."
     )
+
+
+async def cmd_biblioteca(update, context):
+
+    if not await validar_acesso(update, context, "/biblioteca"):
+        return
+
+    if update.effective_chat.type != "private":
+        bot_username = (await context.bot.get_me()).username
+        teclado = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "📚 Abrir Biblioteca Legends",
+                url=f"https://t.me/{bot_username}?start=lib"
+            )
+        ]])
+        await update.message.reply_text(
+            "📚 Pilar da Sabedoria:\n\n"
+            "Para evitar spam nos tópicos da guilda, a Biblioteca Legends "
+            "funciona apenas no privado.\n\n"
+            "Clique no botão abaixo para abrir a biblioteca.",
+            reply_markup=teclado,
+        )
+        return
+
+    await mostrar_inicio_unificado(update.message)
 
 async def cmd_item(update, context):
 
@@ -3362,10 +3913,12 @@ async def cmd_item(update, context):
 
             return
 
-    await update.message.reply_text(
+    await enviar_pagina_biblioteca(
+        update.message,
+        "itens",
         "📚 BIBLIOTECA LEGENDS\n\n"
         "Escolha uma categoria:",
-        reply_markup=teclado_inicio_biblioteca()
+        teclado_inicio_biblioteca()
     )
 
 def teclado_inicio_biblioteca():
@@ -3404,6 +3957,13 @@ def teclado_inicio_biblioteca():
             InlineKeyboardButton(
                 "✨ Especiais",
                 callback_data="bib_especiais"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "⬅ Biblioteca",
+                callback_data="lib_inicio"
             )
         ]
 
@@ -3569,6 +4129,21 @@ def teclado_itens(
         teclado
     )
 
+
+class ConsultaItensComMidia:
+    """Adapta as páginas legadas de texto para a capa persistente de Itens."""
+
+    def __init__(self, query):
+        self._query = query
+
+    def __getattr__(self, nome):
+        return getattr(self._query, nome)
+
+    async def edit_message_text(self, text, reply_markup=None, **kwargs):
+        return await editar_pagina_biblioteca(
+            self._query, "itens", text, reply_markup
+        )
+
 async def mostrar_item(
     query,
     item_id,
@@ -3587,6 +4162,8 @@ async def mostrar_item(
     row = cur.fetchone()
 
     if not row:
+
+        cur.close()
 
         await query.answer(
             "Item não encontrado."
@@ -3769,18 +4346,70 @@ async def mostrar_item(
 
     ])
 
-    await query.edit_message_text(
-        texto,
-        reply_markup=teclado
-    )
+    cur.execute("""
+        SELECT telegram_file_id, telegram_file_unique_id
+        FROM item_imagens
+        WHERE item_id=%s
+        ORDER BY atualizado_em DESC
+        LIMIT 1
+    """, (item_id,))
+    imagem_item = cur.fetchone()
+    cur.close()
+
+    if imagem_item:
+        await editar_pagina_biblioteca(
+            query,
+            "desconhecido",
+            texto,
+            teclado,
+            file_id=imagem_item[0],
+            file_unique_id=imagem_item[1],
+        )
+    else:
+        await editar_pagina_biblioteca(
+            query, "desconhecido", texto, teclado
+        )
 
 async def callback_biblioteca(update, context):
 
-    query = update.callback_query
+    query = ConsultaItensComMidia(update.callback_query)
 
     await query.answer()
 
     dados = query.data
+
+    if dados == "lib_inicio":
+        context.user_data.pop("biblioteca_busca_msg_id", None)
+        await mostrar_inicio_unificado(query, editar=True)
+        return
+
+    if dados == "lib_atlas":
+        context.user_data.pop("biblioteca_busca_msg_id", None)
+        await mostrar_inicio_atlas(query, editar=True)
+        return
+
+    if dados == "lib_itens":
+        context.user_data.pop("biblioteca_busca_msg_id", None)
+        await query.edit_message_text(
+            "🎒 ITENS DA BIBLIOTECA\n\nEscolha uma categoria:",
+            reply_markup=teclado_inicio_biblioteca(),
+        )
+        return
+
+    if dados == "lib_buscar":
+        context.user_data["biblioteca_busca_msg_id"] = query.message.message_id
+        await editar_pagina_biblioteca(
+            query,
+            "biblioteca",
+            "🔎 BUSCAR NA BIBLIOTECA\n\n"
+            "Envie o nome de um item, mapa ou monstro.",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "⬅ Biblioteca", callback_data="lib_inicio"
+                )
+            ]]),
+        )
+        return
 
     if dados.startswith(
         "item_"
@@ -4313,6 +4942,13 @@ def main():
 
     app.add_handler(
         CommandHandler(
+            ["biblioteca", "lib"],
+            cmd_biblioteca
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
             "mapa",
             cmd_mapa
         )
@@ -4399,4 +5035,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -45,6 +45,69 @@ def extrair_monstro_combate(texto):
     return {"nome": nome, "hp": hp}
 
 
+def extrair_monstro_masmorra(texto):
+    """Extrai apenas o bloco atual da sala, ignorando recompensas anteriores."""
+    linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
+    cabecalho = None
+    indice = None
+    padrao = re.compile(
+        r"masmorra\s+(.+?)\s+sala:\s*(\d+)\s*/\s*(\d+)"
+        r"(?:\s+[^\n]*\bboss\b)?",
+        re.IGNORECASE,
+    )
+    for posicao, linha in enumerate(linhas):
+        limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+        match = padrao.search(limpa)
+        if match:
+            cabecalho = match
+            indice = posicao
+            break
+
+    if cabecalho is None or indice is None or indice + 1 >= len(linhas):
+        return None
+
+    nome = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[indice + 1]).strip()
+    if not nome:
+        return None
+
+    hp_atual = None
+    hp_maximo = None
+    codigo_execucao = None
+    for linha in linhas[indice + 2:]:
+        if normalizar(linha).startswith("grupo"):
+            break
+        match_hp = re.search(
+            r"HP:\s*([\d.,]+)\s*/\s*([\d.,]+)", linha, re.IGNORECASE
+        )
+        if match_hp:
+            hp_atual = int(re.sub(r"\D", "", match_hp.group(1)))
+            hp_maximo = int(re.sub(r"\D", "", match_hp.group(2)))
+            match_id = re.search(r"\bID:\s*([A-Z0-9]+)", linha, re.IGNORECASE)
+            if match_id:
+                codigo_execucao = match_id.group(1).upper()
+            break
+
+    trecho_grupo = linhas[indice + 2:]
+    tamanho_grupo = sum(
+        1 for linha in trecho_grupo
+        if re.search(r"—\s*Nv\.\s*\d+", linha, re.IGNORECASE)
+    )
+
+    andar = int(cabecalho.group(2))
+    total_andares = int(cabecalho.group(3))
+    return {
+        "masmorra": f"Masmorra {cabecalho.group(1).strip()}",
+        "andar": andar,
+        "total_andares": total_andares,
+        "boss": andar == total_andares,
+        "nome": nome,
+        "hp_atual": hp_atual,
+        "hp_max": hp_maximo,
+        "codigo_execucao": codigo_execucao,
+        "tamanho_grupo": tamanho_grupo or None,
+    }
+
+
 def chave_origem_drop(item_id, monstro_id=None, mapa_id=None, forma=None):
     """Chave semântica: variações de legenda não repetem a mesma origem."""
     if monstro_id:
@@ -171,4 +234,3 @@ def analisar_texto_loot(texto, itens, mapas):
         }
         for item_id, item_nome in itens_encontrados
     ]
-
