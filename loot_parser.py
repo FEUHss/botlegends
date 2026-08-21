@@ -45,6 +45,124 @@ def extrair_monstro_combate(texto):
     return {"nome": nome, "hp": hp}
 
 
+def extrair_monstro_masmorra(texto):
+    """Extrai apenas o bloco atual da sala, ignorando recompensas anteriores."""
+    linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
+    cabecalho = None
+    indice = None
+    padrao = re.compile(
+        r"masmorra\s+(.+?)\s+sala:\s*(\d+)\s*/\s*(\d+)"
+        r"(?:\s+[^\n]*\bboss\b)?",
+        re.IGNORECASE,
+    )
+    for posicao, linha in enumerate(linhas):
+        limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+        match = padrao.search(limpa)
+        if match:
+            cabecalho = match
+            indice = posicao
+            break
+
+    if cabecalho is None or indice is None or indice + 1 >= len(linhas):
+        return None
+
+    nome = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[indice + 1]).strip()
+    if not nome:
+        return None
+
+    hp_atual = None
+    hp_maximo = None
+    codigo_execucao = None
+    for linha in linhas[indice + 2:]:
+        if normalizar(linha).startswith("grupo"):
+            break
+        match_hp = re.search(
+            r"HP:\s*([\d.,]+)\s*/\s*([\d.,]+)", linha, re.IGNORECASE
+        )
+        if match_hp:
+            hp_atual = int(re.sub(r"\D", "", match_hp.group(1)))
+            hp_maximo = int(re.sub(r"\D", "", match_hp.group(2)))
+            match_id = re.search(r"\bID:\s*([A-Z0-9]+)", linha, re.IGNORECASE)
+            if match_id:
+                codigo_execucao = match_id.group(1).upper()
+            break
+
+    trecho_grupo = linhas[indice + 2:]
+    tamanho_grupo = sum(
+        1 for linha in trecho_grupo
+        if re.search(r"—\s*Nv\.\s*\d+", linha, re.IGNORECASE)
+    )
+
+    andar = int(cabecalho.group(2))
+    total_andares = int(cabecalho.group(3))
+    return {
+        "masmorra": f"Masmorra {cabecalho.group(1).strip()}",
+        "andar": andar,
+        "total_andares": total_andares,
+        "boss": andar == total_andares,
+        "nome": nome,
+        "hp_atual": hp_atual,
+        "hp_max": hp_maximo,
+        "codigo_execucao": codigo_execucao,
+        "tamanho_grupo": tamanho_grupo or None,
+    }
+
+
+def extrair_mapa_visual(texto):
+    """Reconhece a tela principal do mapa sem confundi-la com um perfil."""
+    texto_normalizado = normalizar(texto)
+    marcadores = ("energia:", "tofus:", "gold:", "chaves de masmorra:")
+    if sum(marcador in texto_normalizado for marcador in marcadores) < 3:
+        return None
+
+    for linha in (texto or "").splitlines():
+        limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+        match = re.match(
+            r"(.+?)\s*\(\s*Lv\s*(\d+)\s*\)\s*$",
+            limpa,
+            re.IGNORECASE,
+        )
+        if match:
+            return {
+                "nome": match.group(1).strip(),
+                "nivel": int(match.group(2)),
+            }
+    return None
+
+
+def extrair_masmorra_visual(texto):
+    """Reconhece a entrada ou o lobby de uma masmorra e remove o código da sala."""
+    linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
+    if not linhas:
+        return None
+
+    # Tela de entrada: nome e mapa aparecem explicitamente.
+    if "crie uma sala" in normalizar(texto):
+        nome = None
+        mapa = None
+        for linha in linhas:
+            limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+            if normalizar(limpa).startswith("masmorra ") and nome is None:
+                nome = limpa
+            match_mapa = re.match(r"Mapa:\s*(.+)$", limpa, re.IGNORECASE)
+            if match_mapa:
+                mapa = match_mapa.group(1).strip()
+        if nome and mapa:
+            return {"nome": nome, "mapa": mapa, "codigo_sala": None}
+
+    # Lobby criado: o cabeçalho termina em um código hexadecimal temporário.
+    if "membros (" in normalizar(texto) and "marque-se como pronto" in normalizar(texto):
+        cabecalho = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[0]).strip()
+        match = re.match(r"(.+?)\s+([A-F0-9]{6})$", cabecalho, re.IGNORECASE)
+        if match:
+            return {
+                "nome": match.group(1).strip(),
+                "mapa": None,
+                "codigo_sala": match.group(2).upper(),
+            }
+    return None
+
+
 def chave_origem_drop(item_id, monstro_id=None, mapa_id=None, forma=None):
     """Chave semântica: variações de legenda não repetem a mesma origem."""
     if monstro_id:
@@ -171,4 +289,3 @@ def analisar_texto_loot(texto, itens, mapas):
         }
         for item_id, item_nome in itens_encontrados
     ]
-
