@@ -41,6 +41,12 @@ BIBLIOTECA_ASSETS = {
     "itens": BASE_DIR / "assets" / "items-cover.jpg",
     "desconhecido": BASE_DIR / "assets" / "unknown-cover.jpg",
 }
+BIBLIOTECA_ASSET_URLS = {
+    "biblioteca": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/library-cover.jpg",
+    "atlas": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/atlas-cover.jpg",
+    "itens": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/items-cover.jpg",
+    "desconhecido": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/unknown-cover.jpg",
+}
 
 # Somente este usuário recebe e decide as propostas encontradas em LOOTS.
 LOOT_REVIEWER_ID = int(os.getenv("LOOT_REVIEWER_ID", "5285053532"))
@@ -3468,15 +3474,23 @@ async def editar_pagina_biblioteca(
                 reply_markup=teclado,
             )
         else:
-            caminho = BIBLIOTECA_ASSETS[chave_midia]
-            with caminho.open("rb") as arquivo:
+            try:
                 resposta = await query.edit_message_media(
                     media=InputMediaPhoto(
-                        media=InputFile(arquivo), caption=texto
+                        media=BIBLIOTECA_ASSET_URLS[chave_midia], caption=texto
                     ),
                     reply_markup=teclado,
                 )
-            salvar_midia_biblioteca(chave_midia, resposta)
+                salvar_midia_biblioteca(chave_midia, resposta)
+            except Exception as erro:
+                # O Telegram pode recusar temporariamente o download da capa.
+                # A navegação continua funcional usando a foto atual.
+                print(
+                    f"Erro ao carregar capa {chave_midia} por URL: {erro}"
+                )
+                resposta = await query.edit_message_caption(
+                    caption=texto, reply_markup=teclado
+                )
         return resposta
 
     # Compatibilidade com botões de mensagens antigas, anteriores à navegação
