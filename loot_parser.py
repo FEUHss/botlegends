@@ -108,6 +108,61 @@ def extrair_monstro_masmorra(texto):
     }
 
 
+def extrair_mapa_visual(texto):
+    """Reconhece a tela principal do mapa sem confundi-la com um perfil."""
+    texto_normalizado = normalizar(texto)
+    marcadores = ("energia:", "tofus:", "gold:", "chaves de masmorra:")
+    if sum(marcador in texto_normalizado for marcador in marcadores) < 3:
+        return None
+
+    for linha in (texto or "").splitlines():
+        limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+        match = re.match(
+            r"(.+?)\s*\(\s*Lv\s*(\d+)\s*\)\s*$",
+            limpa,
+            re.IGNORECASE,
+        )
+        if match:
+            return {
+                "nome": match.group(1).strip(),
+                "nivel": int(match.group(2)),
+            }
+    return None
+
+
+def extrair_masmorra_visual(texto):
+    """Reconhece a entrada ou o lobby de uma masmorra e remove o código da sala."""
+    linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
+    if not linhas:
+        return None
+
+    # Tela de entrada: nome e mapa aparecem explicitamente.
+    if "crie uma sala" in normalizar(texto):
+        nome = None
+        mapa = None
+        for linha in linhas:
+            limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+            if normalizar(limpa).startswith("masmorra ") and nome is None:
+                nome = limpa
+            match_mapa = re.match(r"Mapa:\s*(.+)$", limpa, re.IGNORECASE)
+            if match_mapa:
+                mapa = match_mapa.group(1).strip()
+        if nome and mapa:
+            return {"nome": nome, "mapa": mapa, "codigo_sala": None}
+
+    # Lobby criado: o cabeçalho termina em um código hexadecimal temporário.
+    if "membros (" in normalizar(texto) and "marque-se como pronto" in normalizar(texto):
+        cabecalho = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[0]).strip()
+        match = re.match(r"(.+?)\s+([A-F0-9]{6})$", cabecalho, re.IGNORECASE)
+        if match:
+            return {
+                "nome": match.group(1).strip(),
+                "mapa": None,
+                "codigo_sala": match.group(2).upper(),
+            }
+    return None
+
+
 def chave_origem_drop(item_id, monstro_id=None, mapa_id=None, forma=None):
     """Chave semântica: variações de legenda não repetem a mesma origem."""
     if monstro_id:

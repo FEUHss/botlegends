@@ -1,6 +1,11 @@
 import unittest
 
-from loot_parser import extrair_monstro_combate, extrair_monstro_masmorra
+from loot_parser import (
+    extrair_mapa_visual,
+    extrair_masmorra_visual,
+    extrair_monstro_combate,
+    extrair_monstro_masmorra,
+)
 
 
 class ExtracaoMasmorraTests(unittest.TestCase):
@@ -71,6 +76,53 @@ Lobo Alfa da Masmorra
         self.assertEqual(
             extrair_monstro_combate(texto),
             {"nome": "Slime Viscoso", "hp": 160},
+        )
+
+
+class ExtracaoImagensAtlasTests(unittest.TestCase):
+    def test_tela_principal_identifica_mapa(self):
+        texto = """🏰 Planície (Lv 1)
+🧙 46 EremitaDeSantoBerço
+⚡ ENERGIA: 40/40 (Carrega/12min)
+🧀 Tofus: 49
+💰 Gold: 4850242
+🗝 Chaves de Masmorra: 83"""
+
+        self.assertEqual(
+            extrair_mapa_visual(texto),
+            {"nome": "Planície", "nivel": 1},
+        )
+
+    def test_entrada_identifica_masmorra_e_mapa(self):
+        texto = """🗝 Masmorra da Planície
+Mapa: Planície
+
+Crie uma sala para seu grupo ou entre com o código de um amigo."""
+
+        self.assertEqual(
+            extrair_masmorra_visual(texto),
+            {
+                "nome": "Masmorra da Planície",
+                "mapa": "Planície",
+                "codigo_sala": None,
+            },
+        )
+
+    def test_lobby_remove_codigo_temporario_da_masmorra(self):
+        texto = """🏔 RUÍNAS DE AZULGOR F46E1F
+
+Membros (1/5):
+👑 ❌ Lv46 mago EremitaDeSantoBerço
+🔑 O líder precisa de 1 Chave das Minas
+Marque-se como pronto para começar!"""
+
+        self.assertEqual(
+            extrair_masmorra_visual(texto),
+            {
+                "nome": "RUÍNAS DE AZULGOR",
+                "mapa": None,
+                "codigo_sala": "F46E1F",
+            },
         )
 
 
