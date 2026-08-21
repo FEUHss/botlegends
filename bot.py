@@ -15,6 +15,7 @@ from loot_parser import (
     extrair_monstro_masmorra,
     normalizar,
 )
+from market_collector import start_market_collector, stop_market_collector
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -5152,7 +5153,13 @@ async def cmd_crit(update, context):
 def main():
     print("1 - Entrou no main")
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .post_init(start_market_collector)
+        .post_shutdown(stop_market_collector)
+        .build()
+    )
 
     print("2 - Application criada")
 
