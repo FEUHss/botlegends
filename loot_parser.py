@@ -81,9 +81,12 @@ def extrair_monstro_masmorra(texto):
     linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
     cabecalho = None
     indice = None
+    # O jogo usa dois cabeçalhos válidos: o legado
+    # "MASMORRA DA PLANÍCIE Sala: 1/4" e o atual, que pode trazer apenas
+    # o nome próprio, como "SANTUARIO DE ALTHERYN Sala: 4/4".
     padrao = re.compile(
-        r"masmorra\s+(.+?)\s+sala:\s*(\d+)\s*/\s*(\d+)"
-        r"(?:\s+[^\n]*\bboss\b)?",
+        r"^(.+?)\s+sala:\s*(\d+)\s*/\s*(\d+)"
+        r"(?:\s+.*)?$",
         re.IGNORECASE,
     )
     for posicao, linha in enumerate(linhas):
@@ -126,8 +129,14 @@ def extrair_monstro_masmorra(texto):
 
     andar = int(cabecalho.group(2))
     total_andares = int(cabecalho.group(3))
+    nome_masmorra = cabecalho.group(1).strip()
+    if normalizar(nome_masmorra).startswith("masmorra "):
+        nome_masmorra = re.sub(
+            r"^masmorra\s+", "Masmorra ", nome_masmorra,
+            flags=re.IGNORECASE,
+        )
     return {
-        "masmorra": f"Masmorra {cabecalho.group(1).strip()}",
+        "masmorra": nome_masmorra,
         "andar": andar,
         "total_andares": total_andares,
         "boss": andar == total_andares,
