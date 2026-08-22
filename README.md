@@ -22,7 +22,9 @@ Para gerar a sessão localmente, configure `TELETHON_API_ID` e
 python scripts/create_telethon_session.py
 ```
 
-O banco guarda apenas o hash da mensagem e os preços extraídos. O texto
-integral e a identidade do autor não são persistidos. Se a sessão ou qualquer
-credencial estiver ausente, o coletor falha fechado e o bot principal continua
-funcionando.
+O banco guarda o hash, os preços extraídos e, por até 7 dias, o texto da
+mensagem para diagnóstico do parser no painel privado. A identidade do autor
+não é persistida. Depois de 7 dias, o texto é limpo automaticamente e os dados
+estruturados de preço permanecem. Se a sessão ou qualquer credencial estiver
+ausente, o coletor falha fechado e o bot principal continua funcionando.
+
