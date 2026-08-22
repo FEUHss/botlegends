@@ -4,7 +4,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 import psycopg2
@@ -110,7 +110,9 @@ def parse_market_message(text: str) -> list[MarketObservation]:
         return []
 
     observations: list[MarketObservation] = []
-    current_side = _side_from_text(text)
+    # O tipo acompanha cada bloco da mensagem. Não usamos o texto inteiro como
+    # ponto de partida porque um mesmo anúncio pode conter VENDO e COMPRO.
+    current_side = "unknown"
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -200,8 +202,13 @@ CREATE TABLE IF NOT EXISTS market_messages (
     offer_kind TEXT NOT NULL,
     parse_status TEXT NOT NULL,
     parsed_items INTEGER NOT NULL DEFAULT 0,
+    raw_text TEXT,
+    raw_text_expires_at TIMESTAMPTZ,
     PRIMARY KEY (chat_id, message_id)
 );
+
+ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS raw_text TEXT;
+ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS raw_text_expires_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS market_price_observations (
     id BIGSERIAL PRIMARY KEY,
@@ -231,6 +238,10 @@ ON market_price_observations (item_normalized, upgrade, price_currency, message_
 
 CREATE INDEX IF NOT EXISTS idx_market_price_date
 ON market_price_observations (message_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_market_raw_text_expiry
+ON market_messages (raw_text_expires_at)
+WHERE raw_text IS NOT NULL;
 """
 
 
@@ -260,8 +271,9 @@ def _persist_message(
                 """
                 INSERT INTO market_messages (
                     chat_id, message_id, topic_id, message_date, edited_at,
-                    content_sha256, offer_kind, parse_status, parsed_items
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    content_sha256, offer_kind, parse_status, parsed_items,
+                    raw_text, raw_text_expires_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (chat_id, message_id) DO UPDATE SET
                     topic_id = EXCLUDED.topic_id,
                     message_date = EXCLUDED.message_date,
@@ -270,7 +282,9 @@ def _persist_message(
                     content_sha256 = EXCLUDED.content_sha256,
                     offer_kind = EXCLUDED.offer_kind,
                     parse_status = EXCLUDED.parse_status,
-                    parsed_items = EXCLUDED.parsed_items
+                    parsed_items = EXCLUDED.parsed_items,
+                    raw_text = EXCLUDED.raw_text,
+                    raw_text_expires_at = EXCLUDED.raw_text_expires_at
                 """,
                 (
                     chat_id,
@@ -282,6 +296,8 @@ def _persist_message(
                     offer_kind,
                     parse_status,
                     len(observations),
+                    text[:4000],
+                    datetime.now(timezone.utc) + timedelta(days=7),
                 ),
             )
             cursor.execute(
@@ -314,6 +330,12 @@ def _persist_message(
                         message_date,
                     ),
                 )
+            cursor.execute(
+                """UPDATE market_messages
+                SET raw_text=NULL, raw_text_expires_at=NULL
+                WHERE raw_text IS NOT NULL
+                  AND raw_text_expires_at < CURRENT_TIMESTAMP"""
+            )
 
 
 async def start_market_collector(application) -> None:
@@ -384,3 +406,4 @@ async def stop_market_collector(application) -> None:
     client = application.bot_data.pop("market_telethon_client", None)
     if client is not None:
         await client.disconnect()
+

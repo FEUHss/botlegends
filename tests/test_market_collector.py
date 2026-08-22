@@ -53,6 +53,17 @@ Chama no privado"""
     assert observations == []
 
 
+def test_keeps_sell_and_buy_blocks_separate_in_same_message():
+    observations = parse_market_message(
+        """VENDO
+Varinha de Ossos 100 🧀
+COMPRO
+Anel Arcano de Ghurak 80 🧀"""
+    )
+
+    assert [item.side for item in observations] == ["sell", "buy"]
+
+
 def test_normalizes_accents_for_future_catalog_linking():
     assert normalize_name("Lâmina do Dragão Glacial") == "lamina do dragao glacial"
 
@@ -65,3 +76,4 @@ def test_collector_is_disabled_by_default_without_touching_database(monkeypatch)
 
     asyncio.run(start_market_collector(Application()))
     assert Application.bot_data == {}
+
