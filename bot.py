@@ -417,6 +417,24 @@ def inicializar_banco():
             ADD COLUMN IF NOT EXISTS masmorra_id BIGINT
                 REFERENCES catalogo_masmorras(id)
         """)
+        # Cópia única e recuperável do estado anterior à migração. O nome fixo
+        # torna esta proteção idempotente: reinícios futuros não sobrescrevem
+        # o retrato original que recebemos do banco em produção.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS
+                backup_masmorra_20260822_catalogo_monstros
+            AS TABLE catalogo_monstros
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS
+                backup_masmorra_20260822_imagens
+            AS TABLE masmorra_imagens
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS
+                backup_masmorra_20260822_observacoes
+            AS TABLE masmorra_monstro_observacoes
+        """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_xp_progresso_telegram_data
             ON xp_progresso (telegram_id, data_hora DESC)
