@@ -1,11 +1,34 @@
 import unittest
 
 from loot_parser import (
+    correspondencia_aproximada,
     extrair_mapa_visual,
     extrair_masmorra_visual,
     extrair_monstro_combate,
     extrair_monstro_masmorra,
 )
+
+
+def test_dungeon_name_variations_resolve_to_canonical_name():
+    candidates = [
+        ("Masmorra da Planície", ["Masmorra da Planície"]),
+        ("Covil de Zul'gor", ["Covil de Zul'gor"]),
+    ]
+    for received in (
+        "masmorra DA PLANICIE",
+        "MASMORRA DA PLANICIA",
+        "Masmorra da planicie",
+        "Masmorra da plánicie",
+    ):
+        assert correspondencia_aproximada(received, candidates) == "Masmorra da Planície"
+
+
+def test_dungeon_name_does_not_guess_between_ambiguous_candidates():
+    candidates = [
+        ("Masmorra Norte", ["Masmorra Norte"]),
+        ("Masmorra Morte", ["Masmorra Morte"]),
+    ]
+    assert correspondencia_aproximada("Masmorra Forte", candidates) is None
 
 
 class ExtracaoMasmorraTests(unittest.TestCase):
@@ -128,3 +151,4 @@ Marque-se como pronto para começar!"""
 
 if __name__ == "__main__":
     unittest.main()
+
