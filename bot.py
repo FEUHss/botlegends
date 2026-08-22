@@ -391,6 +391,13 @@ def inicializar_banco():
             telegram_message_id BIGINT,
             observado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS catalogo_estado (
+            chave TEXT PRIMARY KEY,
+            inicializado BOOLEAN NOT NULL DEFAULT FALSE,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
         """
     ]
 
@@ -398,6 +405,38 @@ def inicializar_banco():
     try:
         for ddl in tabelas:
             cur.execute(ddl)
+
+        def estado_inicial_catalogo(chave, tabela):
+            """Registra uma vez se uma área já existia antes desta versão."""
+            cur.execute(f"SELECT EXISTS (SELECT 1 FROM {tabela} LIMIT 1)")
+            ja_possuia_dados = cur.fetchone()[0]
+            cur.execute("""
+                INSERT INTO catalogo_estado (chave, inicializado)
+                VALUES (%s, %s)
+                ON CONFLICT (chave) DO NOTHING
+            """, (chave, ja_possuia_dados))
+            cur.execute(
+                "SELECT inicializado FROM catalogo_estado WHERE chave=%s",
+                (chave,),
+            )
+            return cur.fetchone()[0]
+
+        def concluir_carga_inicial(chave):
+            cur.execute("""
+                UPDATE catalogo_estado
+                SET inicializado=TRUE, atualizado_em=CURRENT_TIMESTAMP
+                WHERE chave=%s
+            """, (chave,))
+
+        mapas_ja_inicializados = estado_inicial_catalogo(
+            "mapas_e_masmorras_v1", "catalogo_mapas"
+        )
+        monstros_ja_inicializados = estado_inicial_catalogo(
+            "monstros_v1", "catalogo_monstros"
+        )
+        itens_ja_inicializados = estado_inicial_catalogo(
+            "itens_v1", "itens_legends"
+        )
         cur.execute("""
             ALTER TABLE catalogo_monstros
             ADD COLUMN IF NOT EXISTS masmorra_nome TEXT
@@ -499,39 +538,40 @@ def inicializar_banco():
             (9, "Fortaleza dos Orcs", 44, None, None, None, None, "Mapa de guerra entre as facções Goblin e Orc.", "Site oficial + histórico do Teletofus", True),
             (10, "Abismo", 52, None, None, None, None, None, "Wikia oficial", False),
         ]
-        cur.executemany("""
-            INSERT INTO catalogo_mapas
-                (ordem, nome, nivel_minimo, dificuldade, tempo_masmorra,
-                 xp_masmorra_4, xp_masmorra_5, descricao, fonte, confirmado)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (nome) DO NOTHING
-        """, mapas_iniciais)
+        if not mapas_ja_inicializados:
+            cur.executemany("""
+                INSERT INTO catalogo_mapas
+                    (ordem, nome, nivel_minimo, dificuldade, tempo_masmorra,
+                     xp_masmorra_4, xp_masmorra_5, descricao, fonte, confirmado)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (nome) DO NOTHING
+            """, mapas_iniciais)
 
         masmorras_iniciais = [
             (mapa, ordem, nome)
             for mapa, nomes in MASMORRAS_POR_MAPA.items()
             for ordem, nome in enumerate(nomes, start=1)
         ]
-        cur.executemany("""
-            INSERT INTO catalogo_masmorras
-                (mapa_id, ordem, nome, nome_normalizado, confirmado)
-            SELECT id, %s, %s, %s, TRUE
-            FROM catalogo_mapas
-            WHERE nome=%s
-            ON CONFLICT DO NOTHING
-        """, [
-            (ordem, nome, normalizar(nome), mapa)
-            for mapa, ordem, nome in masmorras_iniciais
-        ])
-        cur.execute("""
-            INSERT INTO masmorra_aliases
-                (masmorra_id, alias, alias_normalizado)
-            SELECT id, nome, nome_normalizado
-            FROM catalogo_masmorras
-            ON CONFLICT (alias_normalizado) DO UPDATE SET
-                masmorra_id=EXCLUDED.masmorra_id,
-                alias=EXCLUDED.alias
-        """)
+        if not mapas_ja_inicializados:
+            cur.executemany("""
+                INSERT INTO catalogo_masmorras
+                    (mapa_id, ordem, nome, nome_normalizado, confirmado)
+                SELECT id, %s, %s, %s, TRUE
+                FROM catalogo_mapas
+                WHERE nome=%s
+                ON CONFLICT DO NOTHING
+            """, [
+                (ordem, nome, normalizar(nome), mapa)
+                for mapa, ordem, nome in masmorras_iniciais
+            ])
+            cur.execute("""
+                INSERT INTO masmorra_aliases
+                    (masmorra_id, alias, alias_normalizado)
+                SELECT id, nome, nome_normalizado
+                FROM catalogo_masmorras
+                ON CONFLICT (alias_normalizado) DO NOTHING
+            """)
+            concluir_carga_inicial("mapas_e_masmorras_v1")
 
         monstros_iniciais = [
             # Planície — caçada
@@ -648,6 +688,7 @@ def inicializar_banco():
               AND mapa.nome = 'Fortaleza dos Orcs'
               AND cm.nome = 'Orc'
               AND cm.tipo = 'Caçada'
+              AND NOT %s
               AND NOT EXISTS (
                   SELECT 1
                   FROM catalogo_monstros AS existente
@@ -655,7 +696,7 @@ def inicializar_banco():
                     AND existente.tipo = cm.tipo
                     AND existente.nome = 'Orc Warmarshal'
               )
-        """)
+        """, (monstros_ja_inicializados,))
         cur.execute("""
             UPDATE catalogo_monstros AS cm
             SET nome = 'Orc Wolf Rider',
@@ -674,6 +715,7 @@ def inicializar_banco():
               AND mapa.nome = 'Fortaleza dos Orcs'
               AND cm.nome = 'Goblin'
               AND cm.tipo = 'Caçada'
+              AND NOT %s
               AND NOT EXISTS (
                   SELECT 1
                   FROM catalogo_monstros AS existente
@@ -681,32 +723,40 @@ def inicializar_banco():
                     AND existente.tipo = cm.tipo
                     AND existente.nome = 'Orc Wolf Rider'
               )
-        """)
-        cur.executemany("""
-            INSERT INTO catalogo_monstros
-                (ordem, nome, mapa_id, tipo, raridade, hp, atk, defesa,
-                 xp, gold, drops, fonte, confirmado)
-            SELECT %s, %s, id, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            FROM catalogo_mapas
-            WHERE nome = %s
-            ON CONFLICT DO NOTHING
-        """, [
-            (ordem, nome, tipo, raridade, hp, atk, defesa, xp, gold,
-             drops, fonte, confirmado, mapa)
-            for ordem, nome, mapa, tipo, raridade, hp, atk, defesa,
-                xp, gold, drops, fonte, confirmado in monstros_iniciais
-        ])
+        """, (monstros_ja_inicializados,))
+        # Estes registros são apenas a carga inicial de um banco novo. Em um
+        # catálogo já administrado, reinseri-los a cada reinício ressuscitava
+        # monstros excluídos corretamente pelo painel.
+        if not monstros_ja_inicializados:
+            cur.executemany("""
+                INSERT INTO catalogo_monstros
+                    (ordem, nome, mapa_id, tipo, raridade, hp, atk, defesa,
+                     xp, gold, drops, fonte, confirmado)
+                SELECT %s, %s, id, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                FROM catalogo_mapas
+                WHERE nome = %s
+                ON CONFLICT DO NOTHING
+            """, [
+                (ordem, nome, tipo, raridade, hp, atk, defesa, xp, gold,
+                 drops, fonte, confirmado, mapa)
+                for ordem, nome, mapa, tipo, raridade, hp, atk, defesa,
+                    xp, gold, drops, fonte, confirmado in monstros_iniciais
+            ])
+            concluir_carga_inicial("monstros_v1")
 
         # Vincula o catálogo legado às masmorras canônicas sem apagar imagens
         # ou observações. Nomes recebidos com caixa/acentuação diferentes são
         # normalizados antes da associação.
-        cur.execute("""
-            SELECT d.id, d.mapa_id, d.nome, d.nome_normalizado, mp.nome
-            FROM catalogo_masmorras d
-            JOIN catalogo_mapas mp ON mp.id=d.mapa_id
-            ORDER BY d.mapa_id, d.ordem, d.id
-        """)
-        masmorras_catalogo = cur.fetchall()
+        if not monstros_ja_inicializados:
+            cur.execute("""
+                SELECT d.id, d.mapa_id, d.nome, d.nome_normalizado, mp.nome
+                FROM catalogo_masmorras d
+                JOIN catalogo_mapas mp ON mp.id=d.mapa_id
+                ORDER BY d.mapa_id, d.ordem, d.id
+            """)
+            masmorras_catalogo = cur.fetchall()
+        else:
+            masmorras_catalogo = []
         por_mapa = {}
         for dungeon_id, mapa_id, nome, nome_normalizado, mapa_nome in masmorras_catalogo:
             por_mapa.setdefault(mapa_id, []).append(
@@ -733,13 +783,17 @@ def inicializar_banco():
                 )
             return None
 
-        cur.execute("""
-            SELECT cm.id, cm.mapa_id, cm.masmorra_nome, mp.nome
-            FROM catalogo_monstros cm
-            JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
-            WHERE LOWER(cm.tipo)=LOWER('Masmorra')
-        """)
-        for monstro_id, mapa_id, nome_recebido, mapa_nome in cur.fetchall():
+        if not monstros_ja_inicializados:
+            cur.execute("""
+                SELECT cm.id, cm.mapa_id, cm.masmorra_nome, mp.nome
+                FROM catalogo_monstros cm
+                JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
+                WHERE LOWER(cm.tipo)=LOWER('Masmorra')
+            """)
+            monstros_para_backfill = cur.fetchall()
+        else:
+            monstros_para_backfill = []
+        for monstro_id, mapa_id, nome_recebido, mapa_nome in monstros_para_backfill:
             masmorra = masmorra_backfill(
                 mapa_id, nome_recebido, mapa_nome
             )
@@ -755,14 +809,18 @@ def inicializar_banco():
             ("masmorra_imagens", "nome_masmorra"),
             ("masmorra_monstro_observacoes", "masmorra"),
         ):
-            cur.execute(f"""
-                SELECT registro.id, registro.mapa_id,
-                       registro.{coluna_nome}, mp.nome
-                FROM {tabela} registro
-                JOIN catalogo_mapas mp ON mp.id=registro.mapa_id
-                WHERE registro.masmorra_id IS NULL
-            """)
-            for registro_id, mapa_id, nome_recebido, mapa_nome in cur.fetchall():
+            if not monstros_ja_inicializados:
+                cur.execute(f"""
+                    SELECT registro.id, registro.mapa_id,
+                           registro.{coluna_nome}, mp.nome
+                    FROM {tabela} registro
+                    JOIN catalogo_mapas mp ON mp.id=registro.mapa_id
+                    WHERE registro.masmorra_id IS NULL
+                """)
+                registros_para_backfill = cur.fetchall()
+            else:
+                registros_para_backfill = []
+            for registro_id, mapa_id, nome_recebido, mapa_nome in registros_para_backfill:
                 masmorra = masmorra_backfill(
                     mapa_id, nome_recebido, mapa_nome
                 )
@@ -794,8 +852,8 @@ def inicializar_banco():
             SET ordem=limite.maior+corrigir.deslocamento,
                 atualizado_em=CURRENT_TIMESTAMP
             FROM corrigir, limite
-            WHERE cm.id=corrigir.id
-        """)
+            WHERE cm.id=corrigir.id AND NOT %s
+        """, (monstros_ja_inicializados,))
         cur.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS uq_catalogo_monstros_ordem
             ON catalogo_monstros (ordem)
@@ -846,7 +904,10 @@ def inicializar_banco():
                 None, None, None, None, None, None, None, None,
             ),
         ]
-        for item in itens_anuncio_ghurak:
+        itens_para_carga = (
+            [] if itens_ja_inicializados else itens_anuncio_ghurak
+        )
+        for item in itens_para_carga:
             (
                 nome, classe, categoria, raridade, duas_maos, nivel,
                 atk_min, atk_max, def_min, def_max, hp_min, hp_max,
@@ -897,6 +958,8 @@ def inicializar_banco():
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                 """, item)
+        if not itens_ja_inicializados:
+            concluir_carga_inicial("itens_v1")
         conn.commit()
         print("0 - Estrutura do banco verificada")
     finally:
@@ -1949,8 +2012,8 @@ def resolver_masmorra_catalogo(cur, nome_detectado, mapa_id=None):
         JOIN catalogo_mapas mp ON mp.id=d.mapa_id
         LEFT JOIN masmorra_aliases a ON a.masmorra_id=d.id
         WHERE (%s IS NULL OR d.mapa_id=%s)
-        GROUP BY d.id, d.mapa_id, mp.nome, d.nome, d.nome_normalizado,
-                 d.ordem
+        GROUP BY d.id, d.mapa_id, mp.nome, mp.ordem, d.nome,
+                 d.nome_normalizado, d.ordem
         ORDER BY mp.ordem, d.ordem, d.id
     """, (mapa_id, mapa_id))
     registros = cur.fetchall()
