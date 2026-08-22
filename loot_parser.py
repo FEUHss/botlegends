@@ -1,5 +1,6 @@
 import re
 import unicodedata
+from difflib import SequenceMatcher
 
 
 MARCADORES_RECOMPENSA = (
@@ -16,6 +17,36 @@ def normalizar(texto):
     texto = unicodedata.normalize("NFKD", texto or "")
     texto = "".join(char for char in texto if not unicodedata.combining(char))
     return re.sub(r"\s+", " ", texto).strip().casefold()
+
+
+def correspondencia_aproximada(texto, candidatos, limiar=0.88, margem=0.05):
+    """Retorna um candidato apenas quando a semelhança é alta e inequívoca.
+
+    ``candidatos`` contém pares ``(valor, nomes_aceitos)``. A função é pura
+    para que as variações vindas do Telegram possam ser testadas sem banco.
+    """
+    procurado = normalizar(texto)
+    if not procurado:
+        return None
+    pontuados = []
+    for valor, nomes in candidatos:
+        variantes = [normalizar(nome) for nome in nomes if normalizar(nome)]
+        if not variantes:
+            continue
+        if procurado in variantes:
+            pontuacao = 1.0
+        else:
+            pontuacao = max(
+                SequenceMatcher(None, procurado, variante).ratio()
+                for variante in variantes
+            )
+        pontuados.append((pontuacao, valor))
+    pontuados.sort(key=lambda item: item[0], reverse=True)
+    if not pontuados or pontuados[0][0] < limiar:
+        return None
+    if len(pontuados) > 1 and pontuados[0][0] - pontuados[1][0] < margem:
+        return None
+    return pontuados[0][1]
 
 
 def extrair_monstro_combate(texto):
@@ -289,3 +320,4 @@ def analisar_texto_loot(texto, itens, mapas):
         }
         for item_id, item_nome in itens_encontrados
     ]
+
