@@ -2226,18 +2226,36 @@ async def processar_imagem_monstro_masmorra(msg, dados):
             rotulo = "Boss" if andar == dados["total_andares"] else f"{andar}º andar"
             linhas_hp.append(f"• {rotulo}: {valor}")
 
-        await msg.reply_text(
+        resposta = (
             f"✅ Imagem salva para {nome_recebido}.\n"
             f"🗺️ {nome_mapa} — {nome_masmorra}\n"
             f"🏰 Sala observada: {dados['andar']}/{dados['total_andares']}\n"
             "❤️ HP observado:\n" + "\n".join(linhas_hp)
         )
+        # A observação já foi confirmada no banco. Uma falha temporária do
+        # Telegram ao responder não pode ser apresentada como falha de gravação.
+        try:
+            await msg.reply_text(resposta)
+        except Exception as erro_resposta:
+            print(
+                "Observação de masmorra salva, mas a confirmação no "
+                f"Telegram falhou: {erro_resposta!r}",
+                flush=True,
+            )
         return True
     except Exception as erro:
         conn.rollback()
-        print(f"Erro ao cadastrar monstro de masmorra: {erro}")
+        codigo_erro = hashlib.sha256(
+            f"{type(erro).__name__}:{erro}".encode("utf-8")
+        ).hexdigest()[:8].upper()
+        print(
+            f"Erro ao cadastrar monstro de masmorra [{codigo_erro}]: "
+            f"{erro!r}",
+            flush=True,
+        )
         await msg.reply_text(
-            "⚠️ Não consegui salvar esta observação de masmorra."
+            "⚠️ Não consegui salvar esta observação de masmorra.\n"
+            f"Código para diagnóstico: {codigo_erro}"
         )
         return True
     finally:
