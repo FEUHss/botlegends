@@ -32,6 +32,20 @@ def test_dungeon_name_does_not_guess_between_ambiguous_candidates():
 
 
 class ExtracaoMasmorraTests(unittest.TestCase):
+    def test_nome_de_futura_masmorra_e_tudo_antes_de_sala(self):
+        texto = """🗝 TEMPLO SUBMERSO DE NERYS Sala: 2/4 🗝
+Sentinela das Marés
+❤️ HP: 830 / 830 ID: A1B2C3
+👥 Grupo ⚔ 40 🛡 30
+🧙 Vênus — Nv. 28"""
+
+        resultado = extrair_monstro_masmorra(texto)
+
+        self.assertEqual(resultado["masmorra"], "TEMPLO SUBMERSO DE NERYS")
+        self.assertEqual(resultado["nome"], "Sentinela das Marés")
+        self.assertEqual(resultado["andar"], 2)
+        self.assertEqual(resultado["total_andares"], 4)
+
     def test_boss_com_nome_proprio_sem_prefixo_masmorra(self):
         texto = """🗝 SANTUARIO DE ALTHERYN  Sala: 4/4 👑 Boss 🗝
 Aparição de Altheryn
