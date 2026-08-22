@@ -32,7 +32,7 @@ class MarketObservation:
 PRICE_RE = re.compile(
     r"(?P<amount>\d+(?:[.,]\d{1,3})?)\s*"
     r"(?P<scale>k|mil|m|milh(?:ao|ão|oes|ões)?)?\s*"
-    r"(?P<currency>🧀|tf|tofu?s?|tufu?s?|gold|ouro|💵)\s*"
+    r"(?P<currency>🧀|tf|tofu?s?|tufu?s?|gold|ouro|💵|💰|🪙)\s*"
     r"(?:cada)?",
     re.IGNORECASE,
 )

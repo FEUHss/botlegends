@@ -72,7 +72,7 @@ Anel Arcano de Ghurak 80 🧀"""
 
 def test_parses_multiple_payment_options_and_ignores_energy_potions():
     observations = parse_market_message(
-        "🟡 Passos do Sol (+1) Lv32 (DEF+7, HP+5) » 20🧀 / 60🧪 / 300k 💵"
+        "🟡 Passos do Sol (+1) Lv32 (DEF+7, HP+5) » 20🧀 / 60🧪 / 300k 💰"
     )
     assert len(observations) == 2
     assert observations[0].item_normalized == "passos do sol"
