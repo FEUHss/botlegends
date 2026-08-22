@@ -457,7 +457,7 @@ def parse_catalog_market_message(
             # Uma continuação válida contém apenas separadores/números antes
             # do preço. Texto desconhecido indica o começo de outro produto.
             prefix_words = normalize_name(prefix)
-            if not prefix_words or prefix_words in {"ou", "por", "cada", "por apenas"}:
+            if not prefix_words or prefix_words in {"l", "ou", "por", "cada", "por apenas"}:
                 for pending_catalog, upgrade, quantity in pending_catalogs:
                     parsed = _observations_for_prices(
                         pending_catalog[2], upgrade, quantity, current_side, line

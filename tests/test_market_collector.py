@@ -194,6 +194,21 @@ Chama de Guerra (mago cajado)
     assert all(entry[0].price_currency == "TOFU" for entry in matched)
 
 
+def test_catalog_parser_accepts_ladder_prefix_after_attribute_line():
+    candidates = [("item", 1, "Arco do Ossuário", "arco do ossuario")]
+    matched = parse_catalog_market_message(
+        """VENDINHA
+Arco do Ossuário [Lv28]
+10 ATK / 10% CRIT
+L-> 8🧀 / 32⚡ / 160k💰""",
+        candidates,
+    )
+    assert [(entry[0].price_amount, entry[0].price_currency) for entry in matched] == [
+        (Decimal("8"), "TOFU"),
+        (Decimal("160000"), "GOLD"),
+    ]
+
+
 def test_collector_is_disabled_by_default_without_touching_database(monkeypatch):
     monkeypatch.delenv("MARKET_COLLECTOR_ENABLED", raising=False)
 
