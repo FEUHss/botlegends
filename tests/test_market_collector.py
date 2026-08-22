@@ -146,6 +146,54 @@ def test_catalog_parser_does_not_attach_price_after_unknown_product_name():
     assert matched == []
 
 
+def test_catalog_parser_reads_cheese_prices_from_common_sales_list():
+    candidates = [
+        ("item", 1, "Boots of Haste", "boots of haste"),
+        ("item", 2, "Machado do Colosso Solar", "machado do colosso solar"),
+        ("item", 3, "Orbe do Eclipse", "orbe do eclipse"),
+    ]
+    matched = parse_catalog_market_message(
+        """VENDO
+Boots of Haste Lv22 +0 6🧀
+Machado do Colosso Solar +0 5🧀
+Orbe do Eclipse Lv32 +0 10🧀""",
+        candidates,
+    )
+    assert [(entry[1][2], entry[0].price_amount, entry[0].price_currency) for entry in matched] == [
+        ("Boots of Haste", Decimal("6"), "TOFU"),
+        ("Machado do Colosso Solar", Decimal("5"), "TOFU"),
+        ("Orbe do Eclipse", Decimal("10"), "TOFU"),
+    ]
+
+
+def test_catalog_parser_interprets_k_without_currency_as_gold():
+    candidates = [("item", 1, "Poeira Estelar", "poeira estelar")]
+    matched = parse_catalog_market_message("COMPRO POEIRA 70k", candidates)
+    observation = matched[0][0]
+    assert observation.side == "buy"
+    assert observation.price_amount == Decimal("70000")
+    assert observation.price_currency == "GOLD"
+
+
+def test_catalog_parser_shares_each_price_between_pending_souls():
+    candidates = [
+        ("soul", 1, "Lança Xamânica", "lanca xamanica"),
+        ("soul", 2, "Benção do Clã", "bencao do cla"),
+        ("soul", 3, "Chama de Guerra", "chama de guerra"),
+    ]
+    matched = parse_catalog_market_message(
+        """VENDO novas almas
+Lança Xamânica (lanceiro)
+Benção do Clã (mago varinha)
+Chama de Guerra (mago cajado)
+700🧀 cada""",
+        candidates,
+    )
+    assert len(matched) == 3
+    assert all(entry[0].price_amount == Decimal("700") for entry in matched)
+    assert all(entry[0].price_currency == "TOFU" for entry in matched)
+
+
 def test_collector_is_disabled_by_default_without_touching_database(monkeypatch):
     monkeypatch.delenv("MARKET_COLLECTOR_ENABLED", raising=False)
 

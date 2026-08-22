@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import hmac
 import os
 import re
 import unicodedata
@@ -34,6 +35,17 @@ PRICE_RE = re.compile(
     r"(?P<scale>k|mil|m|milh(?:ao|ão|oes|ões)?)?\s*"
     r"(?P<currency>🧀|tf|tofu?s?|tufu?s?|gold|ouro|💵|💰|🪙)\s*"
     r"(?:cada)?",
+    re.IGNORECASE,
+)
+BARE_PRICE_RE = re.compile(
+    r"(?:^|[\s=»:\-]|\))(?P<amount>\d+(?:[.,]\d{1,3})?)\s*"
+    r"(?P<scale>k|mil|m)?\s*(?:cada|\(?\s*s[oó]\s+tofu\s*\)?)?\s*$",
+    re.IGNORECASE,
+)
+PRICE_LADDER_RE = re.compile(
+    r"^\s*l\s*[-=]*>\s*(?P<tofu>\d+(?:[.,]\d+)?)\s*/\s*"
+    r"\d+(?:[.,]\d+)?\s*/\s*"
+    r"(?P<gold>\d+(?:[.,]\d+)?)\s*(?P<gold_scale>k|mil|m)?\s*$",
     re.IGNORECASE,
 )
 EXCHANGE_RE = re.compile(
@@ -80,9 +92,9 @@ def _side_from_text(text: str, fallback: str = "unknown") -> str:
     normalized = normalize_name(text)
     if re.search(r"\b(compro|comprando|procuro)\b", normalized):
         return "buy"
-    if re.search(r"\b(troco|troca|negocio)\b", normalized):
+    if re.search(r"\b(troco|troca)\b", normalized):
         return "trade"
-    if re.search(r"\b(vendo|venda|vendinha)\b", normalized):
+    if re.search(r"\b(vendo|venda|vendinha|negocio)\b", normalized):
         return "sell"
     return fallback
 
@@ -216,6 +228,7 @@ ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS raw_text TEXT;
 ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS raw_text_expires_at TIMESTAMPTZ;
 ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS detected_items INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS unmatched_items INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS deduped_items INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS market_price_observations (
     id BIGSERIAL PRIMARY KEY,
@@ -244,12 +257,17 @@ CREATE TABLE IF NOT EXISTS market_price_observations (
 
 ALTER TABLE market_price_observations ADD COLUMN IF NOT EXISTS soul_id BIGINT;
 ALTER TABLE market_price_observations ADD COLUMN IF NOT EXISTS catalog_type TEXT;
+ALTER TABLE market_price_observations ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_market_price_item
 ON market_price_observations (item_normalized, upgrade, price_currency, message_date DESC);
 
 CREATE INDEX IF NOT EXISTS idx_market_price_date
 ON market_price_observations (message_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_market_price_dedupe
+ON market_price_observations (dedupe_key, message_date DESC)
+WHERE dedupe_key IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_market_raw_text_expiry
 ON market_messages (raw_text_expires_at)
@@ -295,7 +313,32 @@ def resolve_catalog_name(
         if f" {candidate[3]} " in padded
     ]
     if not contained:
-        return None
+        ignored = {
+            "vendo", "venda", "vendinha", "compro", "comprando", "procuro",
+            "troco", "troca", "negocio", "promo", "promocao", "item", "itens",
+            "alma", "almas", "cada", "por", "lv", "atk", "def", "hp", "crit",
+            "tf", "tofu", "tofus", "gold", "ouro",
+        }
+
+        def token_key(token: str) -> str:
+            token = {"hydra": "hidra"}.get(token, token)
+            if len(token) > 4 and token.endswith("s"):
+                token = token[:-1]
+            return token
+
+        detected_tokens = {
+            token_key(token)
+            for token in detected.split()
+            if token not in ignored and not any(char.isdigit() for char in token)
+        }
+        if not detected_tokens:
+            return None
+        abbreviated = []
+        for candidate in candidates:
+            candidate_tokens = {token_key(token) for token in candidate[3].split()}
+            if detected_tokens.issubset(candidate_tokens):
+                abbreviated.append(candidate)
+        return abbreviated[0] if len(abbreviated) == 1 else None
     longest = max(len(candidate[3]) for candidate in contained)
     winners = [candidate for candidate in contained if len(candidate[3]) == longest]
     return winners[0] if len(winners) == 1 else None
@@ -328,6 +371,50 @@ def _observations_for_prices(
     return observations
 
 
+def _implicit_prices(
+    item_name: str,
+    upgrade: int | None,
+    quantity: Decimal,
+    side: str,
+    text: str,
+) -> list[MarketObservation]:
+    """Fallback conservador para preço sem emoji após item canônico."""
+    ladder = PRICE_LADDER_RE.match(text)
+    values: list[tuple[Decimal, str]] = []
+    if ladder:
+        values = [
+            (_decimal_number(ladder.group("tofu"), None), "TOFU"),
+            (_decimal_number(ladder.group("gold"), ladder.group("gold_scale")), "GOLD"),
+        ]
+    else:
+        match = BARE_PRICE_RE.search(text)
+        if not match:
+            return []
+        scale = match.group("scale")
+        amount = _decimal_number(match.group("amount"), scale)
+        if amount <= 0:
+            return []
+        # No vocabulário do Market, "70k" significa 70.000 Gold.
+        # Número nu após um item canônico é o fallback de preço em Tofu.
+        values = [(amount, "GOLD" if scale else "TOFU")]
+
+    effective_side = side if side != "unknown" else "sell"
+    return [
+        MarketObservation(
+            item_name=item_name,
+            item_normalized=normalize_name(item_name),
+            side=effective_side,
+            price_amount=amount,
+            price_currency=currency,
+            quantity=quantity,
+            unit_price=amount / quantity,
+            upgrade=upgrade,
+            confidence=Decimal("0.90"),
+        )
+        for amount, currency in values
+    ]
+
+
 def parse_catalog_market_message(
     text: str,
     candidates: list[tuple[str, int, str, str]],
@@ -335,9 +422,7 @@ def parse_catalog_market_message(
     """Usa nomes canônicos como delimitadores e aceita preços continuados."""
     results = []
     current_side = "unknown"
-    current_catalog = None
-    current_upgrade = None
-    current_quantity = Decimal(1)
+    pending_catalogs = []
 
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
@@ -351,41 +436,83 @@ def parse_catalog_market_message(
         catalog = resolve_catalog_name(line, candidates)
         prices = list(PRICE_RE.finditer(line))
         if catalog:
-            current_catalog = catalog
             prefix = line[:prices[0].start()] if prices else line
-            _, current_upgrade, current_quantity = _clean_item_name(prefix)
-            for observation in _observations_for_prices(
-                catalog[2], current_upgrade, current_quantity, current_side, line
-            ):
-                results.append((observation, catalog))
+            _, upgrade, quantity = _clean_item_name(prefix)
+            parsed = _observations_for_prices(
+                catalog[2], upgrade, quantity, current_side, line
+            )
+            if not parsed:
+                parsed = _implicit_prices(
+                    catalog[2], upgrade, quantity, current_side, line
+                )
+            if parsed:
+                pending_catalogs = []
+                results.extend((observation, catalog) for observation in parsed)
+            else:
+                pending_catalogs.append((catalog, upgrade, quantity))
             continue
 
-        if prices and current_catalog:
+        if prices and pending_catalogs:
             prefix = line[:prices[0].start()]
             # Uma continuação válida contém apenas separadores/números antes
             # do preço. Texto desconhecido indica o começo de outro produto.
             prefix_words = normalize_name(prefix)
             if not prefix_words or prefix_words in {"ou", "por", "cada", "por apenas"}:
-                for observation in _observations_for_prices(
-                    current_catalog[2], current_upgrade, current_quantity,
-                    current_side, line
-                ):
-                    results.append((observation, current_catalog))
+                for pending_catalog, upgrade, quantity in pending_catalogs:
+                    parsed = _observations_for_prices(
+                        pending_catalog[2], upgrade, quantity, current_side, line
+                    )
+                    results.extend((observation, pending_catalog) for observation in parsed)
+                pending_catalogs = []
                 continue
-            current_catalog = None
+            pending_catalogs = []
             continue
+
+        if pending_catalogs:
+            implicit = []
+            for pending_catalog, upgrade, quantity in pending_catalogs:
+                parsed = _implicit_prices(
+                    pending_catalog[2], upgrade, quantity, current_side, line
+                )
+                implicit.extend((observation, pending_catalog) for observation in parsed)
+            if implicit:
+                results.extend(implicit)
+                pending_catalogs = []
+                continue
 
         normalized_line = normalize_name(line)
         is_heading = normalized_line in {
             "venda", "vendo", "compro", "compra", "troco", "trocas",
             "almas", "itens", "consumiveis", "armas", "armaduras", "joias",
         }
-        if normalized_line and not is_heading and not prices:
+        is_metadata = bool(re.search(r"\b(atk|def|hp|crit|nivel|lv)\b", normalized_line))
+        if normalized_line and not is_heading and not is_metadata and not prices:
             # Não carregamos um item anterior através de um nome/descritivo
             # desconhecido: isso evita atribuições silenciosas incorretas.
-            current_catalog = None
+            pending_catalogs = []
 
     return results
+
+
+def _offer_dedupe_key(
+    secret: bytes,
+    seller_key: str | None,
+    observation: MarketObservation,
+    catalog: tuple[str, int, str, str],
+) -> str | None:
+    if not seller_key:
+        return None
+    payload = "|".join((
+        seller_key,
+        catalog[0],
+        str(catalog[1]),
+        str(observation.upgrade if observation.upgrade is not None else ""),
+        str(observation.quantity),
+        observation.side,
+        str(observation.price_amount),
+        observation.price_currency,
+    ))
+    return hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _persist_message(
@@ -397,7 +524,9 @@ def _persist_message(
     edited_at: datetime | None,
     text: str,
     observations: list[MarketObservation],
-) -> None:
+    seller_key: str | None = None,
+    dedupe_secret: bytes = b"",
+) -> tuple[int, int]:
     fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
     offer_kind = observations[0].side if observations else _side_from_text(text)
     with psycopg2.connect(database_url) as connection:
@@ -478,7 +607,40 @@ def _persist_message(
                 "DELETE FROM market_price_observations WHERE chat_id = %s AND message_id = %s",
                 (chat_id, message_id),
             )
-            for index, (observation, catalog) in enumerate(matched):
+            accepted = []
+            deduped_count = 0
+            for observation, catalog in matched:
+                dedupe_key = _offer_dedupe_key(
+                    dedupe_secret, seller_key, observation, catalog
+                ) if dedupe_secret else None
+                if dedupe_key:
+                    cursor.execute(
+                        """SELECT 1 FROM market_price_observations
+                        WHERE dedupe_key=%s
+                          AND message_date >= %s - INTERVAL '7 days'
+                        LIMIT 1""",
+                        (dedupe_key, message_date),
+                    )
+                    if cursor.fetchone():
+                        deduped_count += 1
+                        continue
+                accepted.append((observation, catalog, dedupe_key))
+
+            if matched and not accepted:
+                parse_status = "duplicate"
+            elif accepted and unmatched_count:
+                parse_status = "partial"
+            elif accepted:
+                parse_status = "parsed"
+
+            cursor.execute(
+                """UPDATE market_messages
+                SET parse_status=%s, parsed_items=%s, deduped_items=%s
+                WHERE chat_id=%s AND message_id=%s""",
+                (parse_status, len(accepted), deduped_count, chat_id, message_id),
+            )
+
+            for index, (observation, catalog, dedupe_key) in enumerate(accepted):
                 catalog_type, catalog_id, canonical_name, canonical_normalized = catalog
                 item_id = catalog_id if catalog_type == "item" else None
                 soul_id = catalog_id if catalog_type == "soul" else None
@@ -489,10 +651,10 @@ def _persist_message(
                         catalog_type, item_name,
                         item_normalized, upgrade, quantity, offer_side,
                         price_amount, price_currency, unit_price, confidence,
-                        message_date
+                        message_date, dedupe_key
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
@@ -512,6 +674,7 @@ def _persist_message(
                         observation.unit_price,
                         observation.confidence,
                         message_date,
+                        dedupe_key,
                     ),
                 )
             cursor.execute(
@@ -520,6 +683,7 @@ def _persist_message(
                 WHERE raw_text IS NOT NULL
                   AND raw_text_expires_at < CURRENT_TIMESTAMP"""
             )
+            return len(accepted), deduped_count
 
 
 async def start_market_collector(application) -> None:
@@ -547,6 +711,10 @@ async def start_market_collector(application) -> None:
         await asyncio.to_thread(_initialize_market_schema, database_url)
         chat_id = int(os.getenv("MARKET_CHAT_ID", str(DEFAULT_MARKET_CHAT_ID)))
         topic_id = int(os.getenv("MARKET_TOPIC_ID", str(DEFAULT_MARKET_TOPIC_ID)))
+        dedupe_seed = os.getenv("MARKET_DEDUPE_SECRET") or api_hash
+        dedupe_secret = hashlib.sha256(
+            f"market-dedupe:{dedupe_seed}".encode("utf-8")
+        ).digest()
 
         async def persist_telegram_message(message) -> None:
             try:
@@ -555,7 +723,7 @@ async def start_market_collector(application) -> None:
                 text = message.raw_text or ""
                 observations = parse_market_message(text)
                 message_date = message.date or datetime.now(timezone.utc)
-                await asyncio.to_thread(
+                accepted_count, deduped_count = await asyncio.to_thread(
                     _persist_message,
                     database_url,
                     chat_id,
@@ -565,11 +733,13 @@ async def start_market_collector(application) -> None:
                     message.edit_date,
                     text,
                     observations,
+                    str(getattr(message, "sender_id", "") or "") or None,
+                    dedupe_secret,
                 )
                 print(
                     f"MARKET coletado message_id={message.id} "
-                    f"itens={len(observations)} "
-                    f"status={'parsed' if observations else 'no_price'}"
+                    f"precos_aceitos={accepted_count} "
+                    f"repetidos_ignorados={deduped_count}"
                 )
             except Exception as error:
                 print(
