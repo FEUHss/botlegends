@@ -33,7 +33,7 @@ PRICE_RE = re.compile(
     r"(?P<amount>\d+(?:[.,]\d{1,3})?)\s*"
     r"(?P<scale>k|mil|m|milh(?:ao|ão|oes|ões)?)?\s*"
     r"(?P<currency>🧀|tf|tofu?s?|tufu?s?|gold|ouro|💵)\s*"
-    r"(?:cada)?\s*$",
+    r"(?:cada)?",
     re.IGNORECASE,
 )
 EXCHANGE_RE = re.compile(
@@ -98,6 +98,7 @@ def _clean_item_name(raw: str) -> tuple[str, int | None, Decimal]:
 
     raw = QUANTITY_RE.sub("", raw)
     raw = re.sub(r"\[\s*lv\s*\d+[^\]]*\]", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\blv\s*\d+\b", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"\((?!\+?\d+\))[^)]*(?:atk|def|hp|crit|lv)[^)]*\)", "", raw, flags=re.IGNORECASE)
     raw = UPGRADE_RE.sub("", raw)
     raw = re.sub(r"\s*[-–—:]\s*$", "", raw)
@@ -145,11 +146,11 @@ def parse_market_message(text: str) -> list[MarketObservation]:
             )
             continue
 
-        price = PRICE_RE.search(line)
-        if not price:
+        prices = list(PRICE_RE.finditer(line))
+        if not prices:
             continue
 
-        item_name, upgrade, quantity = _clean_item_name(line[: price.start()])
+        item_name, upgrade, quantity = _clean_item_name(line[: prices[0].start()])
         item_normalized = normalize_name(item_name)
         if len(item_normalized) < 3 or item_normalized in {
             "armas",
@@ -161,24 +162,28 @@ def parse_market_message(text: str) -> list[MarketObservation]:
         }:
             continue
 
-        try:
-            amount = _decimal_number(price.group("amount"), price.group("scale"))
-        except (InvalidOperation, ValueError):
-            continue
+        # Sem cabeçalho, item + preço é uma oferta de venda. Um cabeçalho
+        # COMPRO/TROCO continua valendo até o próximo bloco explícito.
+        effective_side = current_side if current_side != "unknown" else "sell"
+        for price in prices:
+            try:
+                amount = _decimal_number(price.group("amount"), price.group("scale"))
+            except (InvalidOperation, ValueError):
+                continue
 
-        observations.append(
-            MarketObservation(
-                item_name=item_name,
-                item_normalized=item_normalized,
-                side=current_side,
-                price_amount=amount,
-                price_currency=_currency(price.group("currency")),
-                quantity=quantity,
-                unit_price=amount / quantity,
-                upgrade=upgrade,
-                confidence=Decimal("0.95"),
+            observations.append(
+                MarketObservation(
+                    item_name=item_name,
+                    item_normalized=item_normalized,
+                    side=effective_side,
+                    price_amount=amount,
+                    price_currency=_currency(price.group("currency")),
+                    quantity=quantity,
+                    unit_price=amount / quantity,
+                    upgrade=upgrade,
+                    confidence=Decimal("0.95"),
+                )
             )
-        )
 
     return observations
 
@@ -209,6 +214,8 @@ CREATE TABLE IF NOT EXISTS market_messages (
 
 ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS raw_text TEXT;
 ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS raw_text_expires_at TIMESTAMPTZ;
+ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS detected_items INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE market_messages ADD COLUMN IF NOT EXISTS unmatched_items INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS market_price_observations (
     id BIGSERIAL PRIMARY KEY,
@@ -216,6 +223,8 @@ CREATE TABLE IF NOT EXISTS market_price_observations (
     message_id BIGINT NOT NULL,
     item_index INTEGER NOT NULL,
     item_id BIGINT,
+    soul_id BIGINT,
+    catalog_type TEXT,
     item_name TEXT NOT NULL,
     item_normalized TEXT NOT NULL,
     upgrade INTEGER,
@@ -232,6 +241,9 @@ CREATE TABLE IF NOT EXISTS market_price_observations (
         REFERENCES market_messages(chat_id, message_id)
         ON DELETE CASCADE
 );
+
+ALTER TABLE market_price_observations ADD COLUMN IF NOT EXISTS soul_id BIGINT;
+ALTER TABLE market_price_observations ADD COLUMN IF NOT EXISTS catalog_type TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_market_price_item
 ON market_price_observations (item_normalized, upgrade, price_currency, message_date DESC);
@@ -251,6 +263,131 @@ def _initialize_market_schema(database_url: str) -> None:
             cursor.execute(MARKET_DDL)
 
 
+def _catalog_candidates(cursor) -> list[tuple[str, int, str, str]]:
+    """Retorna somente nomes administrados pela Biblioteca Legends."""
+    candidates: list[tuple[str, int, str, str]] = []
+    cursor.execute("SELECT id, nome FROM itens_legends")
+    candidates.extend(
+        ("item", row_id, name, normalize_name(name))
+        for row_id, name in cursor.fetchall()
+    )
+    cursor.execute("SELECT id, nome FROM almas_legends")
+    candidates.extend(
+        ("soul", row_id, name, normalize_name(name))
+        for row_id, name in cursor.fetchall()
+    )
+    return candidates
+
+
+def resolve_catalog_name(
+    detected_name: str,
+    candidates: list[tuple[str, int, str, str]],
+) -> tuple[str, int, str, str] | None:
+    """Faz correspondência conservadora: exata ou nome canônico inteiro."""
+    detected = normalize_name(detected_name)
+    exact = [candidate for candidate in candidates if candidate[3] == detected]
+    if len(exact) == 1:
+        return exact[0]
+
+    padded = f" {detected} "
+    contained = [
+        candidate for candidate in candidates
+        if f" {candidate[3]} " in padded
+    ]
+    if not contained:
+        return None
+    longest = max(len(candidate[3]) for candidate in contained)
+    winners = [candidate for candidate in contained if len(candidate[3]) == longest]
+    return winners[0] if len(winners) == 1 else None
+
+
+def _observations_for_prices(
+    item_name: str,
+    upgrade: int | None,
+    quantity: Decimal,
+    side: str,
+    text: str,
+) -> list[MarketObservation]:
+    observations = []
+    for price in PRICE_RE.finditer(text):
+        try:
+            amount = _decimal_number(price.group("amount"), price.group("scale"))
+        except (InvalidOperation, ValueError):
+            continue
+        observations.append(MarketObservation(
+            item_name=item_name,
+            item_normalized=normalize_name(item_name),
+            side=side if side != "unknown" else "sell",
+            price_amount=amount,
+            price_currency=_currency(price.group("currency")),
+            quantity=quantity,
+            unit_price=amount / quantity,
+            upgrade=upgrade,
+            confidence=Decimal("0.98"),
+        ))
+    return observations
+
+
+def parse_catalog_market_message(
+    text: str,
+    candidates: list[tuple[str, int, str, str]],
+) -> list[tuple[MarketObservation, tuple[str, int, str, str]]]:
+    """Usa nomes canônicos como delimitadores e aceita preços continuados."""
+    results = []
+    current_side = "unknown"
+    current_catalog = None
+    current_upgrade = None
+    current_quantity = Decimal(1)
+
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        line_side = _side_from_text(line, current_side)
+        if line_side != "unknown":
+            current_side = line_side
+
+        catalog = resolve_catalog_name(line, candidates)
+        prices = list(PRICE_RE.finditer(line))
+        if catalog:
+            current_catalog = catalog
+            prefix = line[:prices[0].start()] if prices else line
+            _, current_upgrade, current_quantity = _clean_item_name(prefix)
+            for observation in _observations_for_prices(
+                catalog[2], current_upgrade, current_quantity, current_side, line
+            ):
+                results.append((observation, catalog))
+            continue
+
+        if prices and current_catalog:
+            prefix = line[:prices[0].start()]
+            # Uma continuação válida contém apenas separadores/números antes
+            # do preço. Texto desconhecido indica o começo de outro produto.
+            prefix_words = normalize_name(prefix)
+            if not prefix_words or prefix_words in {"ou", "por", "cada", "por apenas"}:
+                for observation in _observations_for_prices(
+                    current_catalog[2], current_upgrade, current_quantity,
+                    current_side, line
+                ):
+                    results.append((observation, current_catalog))
+                continue
+            current_catalog = None
+            continue
+
+        normalized_line = normalize_name(line)
+        is_heading = normalized_line in {
+            "venda", "vendo", "compro", "compra", "troco", "trocas",
+            "almas", "itens", "consumiveis", "armas", "armaduras", "joias",
+        }
+        if normalized_line and not is_heading and not prices:
+            # Não carregamos um item anterior através de um nome/descritivo
+            # desconhecido: isso evita atribuições silenciosas incorretas.
+            current_catalog = None
+
+    return results
+
+
 def _persist_message(
     database_url: str,
     chat_id: int,
@@ -263,17 +400,50 @@ def _persist_message(
 ) -> None:
     fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
     offer_kind = observations[0].side if observations else _side_from_text(text)
-    parse_status = "parsed" if observations else "no_price"
-
     with psycopg2.connect(database_url) as connection:
         with connection.cursor() as cursor:
+            candidates = _catalog_candidates(cursor)
+            matched = []
+            unmatched_generic = 0
+            for observation in observations:
+                catalog = resolve_catalog_name(observation.item_name, candidates)
+                if catalog:
+                    matched.append((observation, catalog))
+                else:
+                    unmatched_generic += 1
+
+            matched.extend(parse_catalog_market_message(text, candidates))
+            unique_matched = []
+            seen = set()
+            for observation, catalog in matched:
+                key = (
+                    catalog[0], catalog[1], observation.upgrade,
+                    observation.quantity, observation.side,
+                    observation.price_amount, observation.price_currency,
+                )
+                if key not in seen:
+                    seen.add(key)
+                    unique_matched.append((observation, catalog))
+            matched = unique_matched
+
+            unmatched_count = unmatched_generic
+            detected_count = max(len(observations), len(matched) + unmatched_count)
+            if not detected_count:
+                parse_status = "no_price"
+            elif not matched:
+                parse_status = "unmatched_item"
+            elif unmatched_count:
+                parse_status = "partial"
+            else:
+                parse_status = "parsed"
+
             cursor.execute(
                 """
                 INSERT INTO market_messages (
                     chat_id, message_id, topic_id, message_date, edited_at,
                     content_sha256, offer_kind, parse_status, parsed_items,
-                    raw_text, raw_text_expires_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    raw_text, raw_text_expires_at, detected_items, unmatched_items
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (chat_id, message_id) DO UPDATE SET
                     topic_id = EXCLUDED.topic_id,
                     message_date = EXCLUDED.message_date,
@@ -284,7 +454,9 @@ def _persist_message(
                     parse_status = EXCLUDED.parse_status,
                     parsed_items = EXCLUDED.parsed_items,
                     raw_text = EXCLUDED.raw_text,
-                    raw_text_expires_at = EXCLUDED.raw_text_expires_at
+                    raw_text_expires_at = EXCLUDED.raw_text_expires_at,
+                    detected_items = EXCLUDED.detected_items,
+                    unmatched_items = EXCLUDED.unmatched_items
                 """,
                 (
                     chat_id,
@@ -295,31 +467,43 @@ def _persist_message(
                     fingerprint,
                     offer_kind,
                     parse_status,
-                    len(observations),
+                    len(matched),
                     text[:4000],
                     datetime.now(timezone.utc) + timedelta(days=7),
+                    detected_count,
+                    unmatched_count,
                 ),
             )
             cursor.execute(
                 "DELETE FROM market_price_observations WHERE chat_id = %s AND message_id = %s",
                 (chat_id, message_id),
             )
-            for index, observation in enumerate(observations):
+            for index, (observation, catalog) in enumerate(matched):
+                catalog_type, catalog_id, canonical_name, canonical_normalized = catalog
+                item_id = catalog_id if catalog_type == "item" else None
+                soul_id = catalog_id if catalog_type == "soul" else None
                 cursor.execute(
                     """
                     INSERT INTO market_price_observations (
-                        chat_id, message_id, item_index, item_name,
+                        chat_id, message_id, item_index, item_id, soul_id,
+                        catalog_type, item_name,
                         item_normalized, upgrade, quantity, offer_side,
                         price_amount, price_currency, unit_price, confidence,
                         message_date
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s
+                    )
                     """,
                     (
                         chat_id,
                         message_id,
                         index,
-                        observation.item_name,
-                        observation.item_normalized,
+                        item_id,
+                        soul_id,
+                        catalog_type,
+                        canonical_name,
+                        canonical_normalized,
                         observation.upgrade,
                         observation.quantity,
                         observation.side,
@@ -364,9 +548,8 @@ async def start_market_collector(application) -> None:
         chat_id = int(os.getenv("MARKET_CHAT_ID", str(DEFAULT_MARKET_CHAT_ID)))
         topic_id = int(os.getenv("MARKET_TOPIC_ID", str(DEFAULT_MARKET_TOPIC_ID)))
 
-        async def collect(event) -> None:
+        async def persist_telegram_message(message) -> None:
             try:
-                message = event.message
                 if message_topic_id(message) != topic_id:
                     return
                 text = message.raw_text or ""
@@ -394,15 +577,46 @@ async def start_market_collector(application) -> None:
                     f"{type(error).__name__}: {error}"
                 )
 
+        async def collect(event) -> None:
+            await persist_telegram_message(event.message)
+
+        async def backfill_recent_market() -> None:
+            limit = max(0, min(int(os.getenv("MARKET_BACKFILL_LIMIT", "500")), 2000))
+            if not limit:
+                return
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            processed = 0
+            try:
+                async for message in client.iter_messages(
+                    chat_id, reply_to=topic_id, limit=limit
+                ):
+                    message_date = message.date or datetime.now(timezone.utc)
+                    if message_date < cutoff:
+                        break
+                    await persist_telegram_message(message)
+                    processed += 1
+                print(f"5 - Backfill do Market concluído mensagens={processed}")
+            except Exception as error:
+                print(
+                    "5 - Backfill do Market falhou sem interromper o monitoramento: "
+                    f"{type(error).__name__}: {error}"
+                )
+
         client.add_event_handler(collect, events.NewMessage(chats=chat_id))
         client.add_event_handler(collect, events.MessageEdited(chats=chat_id))
         application.bot_data["market_telethon_client"] = client
+        application.bot_data["market_backfill_task"] = asyncio.create_task(
+            backfill_recent_market()
+        )
         print(f"5 - Coletor do Market ativo chat={chat_id} tópico={topic_id}")
     except Exception as error:
         print(f"5 - Coletor do Market falhou sem interromper o bot: {type(error).__name__}: {error}")
 
 
 async def stop_market_collector(application) -> None:
+    backfill_task = application.bot_data.pop("market_backfill_task", None)
+    if backfill_task is not None and not backfill_task.done():
+        backfill_task.cancel()
     client = application.bot_data.pop("market_telethon_client", None)
     if client is not None:
         await client.disconnect()

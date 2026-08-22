@@ -42,12 +42,20 @@ BIBLIOTECA_ASSETS = {
     "atlas": BASE_DIR / "assets" / "atlas-cover.jpg",
     "itens": BASE_DIR / "assets" / "items-cover.jpg",
     "desconhecido": BASE_DIR / "assets" / "unknown-cover.jpg",
+    "almas": BASE_DIR / "assets" / "souls" / "souls-cover.jpg",
+    "almas_guerreiro": BASE_DIR / "assets" / "souls" / "warrior-souls.jpg",
+    "almas_arqueiro": BASE_DIR / "assets" / "souls" / "archer-souls.jpg",
+    "almas_mago": BASE_DIR / "assets" / "souls" / "mage-souls.jpg",
 }
 BIBLIOTECA_ASSET_URLS = {
     "biblioteca": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/library-cover.jpg",
     "atlas": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/atlas-cover.jpg",
     "itens": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/items-cover.jpg",
     "desconhecido": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/unknown-cover.jpg",
+    "almas": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/souls/souls-cover.jpg",
+    "almas_guerreiro": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/souls/warrior-souls.jpg",
+    "almas_arqueiro": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/souls/archer-souls.jpg",
+    "almas_mago": "https://raw.githubusercontent.com/FEUHss/botlegends/main/assets/souls/mage-souls.jpg",
 }
 
 # Somente este usuário recebe e decide as propostas encontradas em LOOTS.
@@ -229,6 +237,20 @@ def inicializar_banco():
             descricao TEXT,
             fonte TEXT NOT NULL,
             confirmado BOOLEAN DEFAULT FALSE,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS almas_legends (
+            id BIGSERIAL PRIMARY KEY,
+            nome TEXT UNIQUE NOT NULL,
+            classe_base TEXT NOT NULL,
+            especializacao TEXT NOT NULL,
+            equipamento TEXT NOT NULL,
+            recarga_turnos INTEGER,
+            efeito TEXT,
+            confirmado BOOLEAN NOT NULL DEFAULT FALSE,
+            fonte TEXT NOT NULL DEFAULT 'Material da guilda',
             atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
         """,
@@ -436,6 +458,9 @@ def inicializar_banco():
         )
         itens_ja_inicializados = estado_inicial_catalogo(
             "itens_v1", "itens_legends"
+        )
+        almas_ja_inicializadas = estado_inicial_catalogo(
+            "almas_v1", "almas_legends"
         )
         cur.execute("""
             ALTER TABLE catalogo_monstros
@@ -960,6 +985,54 @@ def inicializar_banco():
                 """, item)
         if not itens_ja_inicializados:
             concluir_carga_inicial("itens_v1")
+
+        almas_iniciais = [
+            ("Fúria do Lobo", "Guerreiro", "Berserker", "Machado", 3,
+             "Golpe fortalecido e aumento temporário de ATK.", False),
+            ("Golpe Sombrio", "Guerreiro", "Berserker", "Machado", 4,
+             "Golpe fortalecido que recupera parte do dano como HP.", False),
+            ("Fúria do Titã", "Guerreiro", "Berserker", "Machado", 5,
+             "O próximo golpe causa 2x de dano.", True),
+            ("Rugido do Rochedo", "Guerreiro", "Paladino", "Espada e Escudo", 4,
+             "Reduz o dano recebido por 2 turnos e provoca o inimigo.", False),
+            ("Escudo de Ossos", "Guerreiro", "Paladino", "Espada e Escudo", 5,
+             "Recupera uma parcela elevada do HP máximo.", False),
+            ("Golpe do Obelisco", "Guerreiro", "Paladino", "Espada e Escudo", 6,
+             "Golpe fortalecido com dano adicional baseado na DEF.", False),
+            ("Picada da Aranha", "Arqueiro", "Caçador", "Arco", 4,
+             "Golpe fortalecido que aplica veneno por 2 turnos.", False),
+            ("Precisão Élfica", "Arqueiro", "Caçador", "Arco", 6,
+             "Aprimora o acerto crítico do próximo ataque.", False),
+            ("Flecha do Djinn", "Arqueiro", "Caçador", "Arco", 6,
+             "Golpe fortalecido que ignora parte da DEF do inimigo.", False),
+            ("Lança dos Ventos", "Arqueiro", "Lanceiro", "Lança", 3,
+             "Golpe fortalecido com recuperação de vida.", False),
+            ("Lança do Guardião", "Arqueiro", "Lanceiro", "Lança", 4,
+             "Reduz o dano recebido e provoca o inimigo.", False),
+            ("Lança Solar", "Arqueiro", "Lanceiro", "Lança", 6,
+             "Golpe fortalecido com dano adicional baseado no HP máximo.", False),
+            ("Maldição da Bruxa", "Mago", "Cajado", "Cajado", 4,
+             "Golpe fortalecido que aplica uma maldição temporária.", False),
+            ("Poder do Lich", "Mago", "Cajado", "Cajado", 5,
+             "Golpe fortalecido e aumento temporário de ATK.", False),
+            ("Tempestade de Areia", "Mago", "Cajado", "Cajado", 6,
+             "O próximo golpe causa 2x de dano.", True),
+            ("Escudo Arcano", "Mago", "Suporte", "Varinha", 4,
+             "Reduz o dano recebido pelo grupo por 3 turnos.", False),
+            ("Vontade do Lich", "Mago", "Suporte", "Varinha", 4,
+             "Recupera uma parcela do HP máximo do grupo.", False),
+            ("Orbe Solar", "Mago", "Suporte", "Varinha", 3,
+             "Golpe fortalecido e aumento temporário do ATK do grupo.", False),
+        ]
+        if not almas_ja_inicializadas:
+            cur.executemany("""
+                INSERT INTO almas_legends (
+                    nome, classe_base, especializacao, equipamento,
+                    recarga_turnos, efeito, confirmado
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (nome) DO NOTHING
+            """, almas_iniciais)
+            concluir_carga_inicial("almas_v1")
         conn.commit()
         print("0 - Estrutura do banco verificada")
     finally:
@@ -2760,6 +2833,15 @@ async def processar_busca_biblioteca(update, context):
             LIMIT 4
         """, (padrao,))
         mapas = cur.fetchall()
+
+        cur.execute("""
+            SELECT id, nome, especializacao
+            FROM almas_legends
+            WHERE nome ILIKE %s
+            ORDER BY nome
+            LIMIT 6
+        """, (padrao,))
+        almas = cur.fetchall()
     finally:
         cur.close()
 
@@ -2779,11 +2861,16 @@ async def processar_busca_biblioteca(update, context):
         linhas.append([InlineKeyboardButton(
             f"🗺️ {nome}", callback_data=f"atlas_m_{mapa_id}"
         )])
+    for alma_id, nome, especializacao in almas:
+        linhas.append([InlineKeyboardButton(
+            f"✨ {nome} — {especializacao}",
+            callback_data=f"alma_{alma_id}",
+        )])
     linhas.append([InlineKeyboardButton(
         "⬅ Biblioteca", callback_data="lib_inicio"
     )])
 
-    total = len(itens) + len(monstros) + len(mapas)
+    total = len(itens) + len(monstros) + len(mapas) + len(almas)
     texto = (
         f"🔎 BUSCA — {termo}\n\n"
         + (f"Encontrados: {total}" if total else "Nenhum resultado encontrado.")
@@ -3805,6 +3892,7 @@ def teclado_inicio_unificado():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🗺️ Atlas", callback_data="lib_atlas")],
         [InlineKeyboardButton("🎒 Itens", callback_data="lib_itens")],
+        [InlineKeyboardButton("✨ Almas", callback_data="lib_almas")],
         [InlineKeyboardButton("🔎 Buscar", callback_data="lib_buscar")],
     ])
 
@@ -3812,7 +3900,7 @@ def teclado_inicio_unificado():
 async def mostrar_inicio_unificado(alvo, editar=False):
     texto = (
         "📚 BIBLIOTECA LEGENDS\n\n"
-        "Explore os mapas, monstros e itens catalogados pela guilda."
+        "Explore mapas, monstros, itens e almas catalogados pela guilda."
     )
     if editar:
         await editar_pagina_biblioteca(
@@ -3822,6 +3910,109 @@ async def mostrar_inicio_unificado(alvo, editar=False):
         await enviar_pagina_biblioteca(
             alvo, "biblioteca", texto, teclado_inicio_unificado()
         )
+
+
+ESPECIALIZACOES_ALMAS = {
+    "berserker": ("Berserker", "Guerreiro", "almas_guerreiro", "🪓"),
+    "paladino": ("Paladino", "Guerreiro", "almas_guerreiro", "🛡️"),
+    "cacador": ("Caçador", "Arqueiro", "almas_arqueiro", "🏹"),
+    "lanceiro": ("Lanceiro", "Arqueiro", "almas_arqueiro", "🔱"),
+    "cajado": ("Cajado", "Mago", "almas_mago", "🪄"),
+    "suporte": ("Suporte", "Mago", "almas_mago", "✨"),
+}
+
+
+def teclado_especializacoes_almas():
+    botoes = []
+    pares = [
+        ("berserker", "paladino"),
+        ("cacador", "lanceiro"),
+        ("cajado", "suporte"),
+    ]
+    for esquerda, direita in pares:
+        linha = []
+        for slug in (esquerda, direita):
+            nome, _, _, emoji = ESPECIALIZACOES_ALMAS[slug]
+            linha.append(InlineKeyboardButton(
+                f"{emoji} {nome}", callback_data=f"almas_{slug}"
+            ))
+        botoes.append(linha)
+    botoes.append([InlineKeyboardButton(
+        "⬅ Biblioteca", callback_data="lib_inicio"
+    )])
+    return InlineKeyboardMarkup(botoes)
+
+
+async def mostrar_inicio_almas(query):
+    await editar_pagina_biblioteca(
+        query,
+        "almas",
+        "✨ ALMAS DE TELETOFUS\n\nEscolha uma das 6 especializações:",
+        teclado_especializacoes_almas(),
+    )
+
+
+async def mostrar_almas_especializacao(query, slug):
+    nome, classe, midia, emoji = ESPECIALIZACOES_ALMAS[slug]
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id, nome
+            FROM almas_legends
+            WHERE LOWER(especializacao)=LOWER(%s)
+            ORDER BY id
+        """, (nome,))
+        almas = cur.fetchall()
+    finally:
+        cur.close()
+    botoes = [[InlineKeyboardButton(
+        f"✨ {alma_nome}", callback_data=f"alma_{alma_id}"
+    )] for alma_id, alma_nome in almas]
+    botoes.append([InlineKeyboardButton("⬅ Almas", callback_data="lib_almas")])
+    await editar_pagina_biblioteca(
+        query,
+        midia,
+        f"{emoji} {nome.upper()} — {classe.upper()}\n\nEscolha uma alma:",
+        InlineKeyboardMarkup(botoes),
+    )
+
+
+async def mostrar_alma(query, alma_id):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT nome, classe_base, especializacao, equipamento,
+                   recarga_turnos, efeito, confirmado, fonte
+            FROM almas_legends WHERE id=%s
+        """, (alma_id,))
+        alma = cur.fetchone()
+    finally:
+        cur.close()
+    if not alma:
+        await query.answer("Alma não encontrada.", show_alert=True)
+        return
+    nome, classe, especializacao, equipamento, recarga, efeito, confirmado, fonte = alma
+    slug = next((
+        chave for chave, dados in ESPECIALIZACOES_ALMAS.items()
+        if dados[0].casefold() == especializacao.casefold()
+    ), "cajado")
+    midia = ESPECIALIZACOES_ALMAS[slug][2]
+    estado = "Confirmado" if confirmado else "Efeito em revisão"
+    texto = (
+        f"✨ {nome.upper()}\n\n"
+        f"🏷️ {classe} — {especializacao}\n"
+        f"⚔️ Equipamento: {equipamento}\n"
+        f"⏳ Recarga: {recarga or 'a confirmar'} turnos\n\n"
+        f"📖 {efeito or 'Efeito a confirmar.'}\n\n"
+        f"🔎 {estado}\n📚 Fonte: {fonte}"
+    )
+    teclado = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "⬅ Voltar às almas", callback_data=f"almas_{slug}"
+        )],
+        [InlineKeyboardButton("📚 Biblioteca", callback_data="lib_inicio")],
+    ])
+    await editar_pagina_biblioteca(query, midia, texto, teclado)
 
 
 async def cmd_mapa(update, context):
@@ -5013,13 +5204,32 @@ async def callback_biblioteca(update, context):
         )
         return
 
+    if dados == "lib_almas":
+        context.user_data.pop("biblioteca_busca_msg_id", None)
+        await mostrar_inicio_almas(query)
+        return
+
+    if dados.startswith("almas_"):
+        slug = dados.removeprefix("almas_")
+        if slug in ESPECIALIZACOES_ALMAS:
+            await mostrar_almas_especializacao(query, slug)
+        return
+
+    if dados.startswith("alma_"):
+        try:
+            alma_id = int(dados.removeprefix("alma_"))
+        except ValueError:
+            return
+        await mostrar_alma(query, alma_id)
+        return
+
     if dados == "lib_buscar":
         context.user_data["biblioteca_busca_msg_id"] = query.message.message_id
         await editar_pagina_biblioteca(
             query,
             "biblioteca",
             "🔎 BUSCAR NA BIBLIOTECA\n\n"
-            "Envie o nome de um item, mapa ou monstro.",
+            "Envie o nome de um item, alma, mapa ou monstro.",
             InlineKeyboardMarkup([[
                 InlineKeyboardButton(
                     "⬅ Biblioteca", callback_data="lib_inicio"

@@ -1,7 +1,13 @@
 import asyncio
 from decimal import Decimal
 
-from market_collector import normalize_name, parse_market_message, start_market_collector
+from market_collector import (
+    normalize_name,
+    parse_catalog_market_message,
+    parse_market_message,
+    resolve_catalog_name,
+    start_market_collector,
+)
 
 
 def test_parses_multiple_tofu_prices_and_upgrades():
@@ -64,8 +70,80 @@ Anel Arcano de Ghurak 80 🧀"""
     assert [item.side for item in observations] == ["sell", "buy"]
 
 
+def test_parses_multiple_payment_options_and_ignores_energy_potions():
+    observations = parse_market_message(
+        "🟡 Passos do Sol (+1) Lv32 (DEF+7, HP+5) » 20🧀 / 60🧪 / 300k 💵"
+    )
+    assert len(observations) == 2
+    assert observations[0].item_normalized == "passos do sol"
+    assert observations[0].upgrade == 1
+    assert observations[0].price_currency == "TOFU"
+    assert observations[0].price_amount == Decimal("20")
+    assert observations[1].price_currency == "GOLD"
+    assert observations[1].price_amount == Decimal("300000")
+    assert all(item.side == "sell" for item in observations)
+
+
+def test_keeps_large_sell_and_buy_sections_separate_with_alternative_prices():
+    observations = parse_market_message(
+        """VENDA
+Maldição da Bruxa » 4🧀 / 12🧪 / 60k 💵
+Golpe do Obelisco » 4🧀
+
+COMPRO
+Lança Solar » 3🧀 / 200k GOLD"""
+    )
+    assert [item.side for item in observations] == [
+        "sell", "sell", "sell", "buy", "buy"
+    ]
+
+
 def test_normalizes_accents_for_future_catalog_linking():
     assert normalize_name("Lâmina do Dragão Glacial") == "lamina do dragao glacial"
+
+
+def test_catalog_linking_removes_market_prefixes_without_changing_canonical_name():
+    candidates = [
+        ("soul", 7, "Fúria do Lobo", "furia do lobo"),
+        ("item", 8, "Anel Arcano de Ghurak", "anel arcano de ghurak"),
+    ]
+    match = resolve_catalog_name(
+        "promoção vendo FURIA DO LOBO barato", candidates
+    )
+    assert match == ("soul", 7, "Fúria do Lobo", "furia do lobo")
+
+
+def test_catalog_linking_rejects_unknown_product():
+    candidates = [("soul", 7, "Fúria do Lobo", "furia do lobo")]
+    assert resolve_catalog_name("alma misteriosa nova", candidates) is None
+
+
+def test_catalog_parser_carries_wrapped_price_until_next_known_item():
+    candidates = [
+        ("item", 1, "Passos do Sol", "passos do sol"),
+        ("soul", 2, "Lança Solar", "lanca solar"),
+    ]
+    matched = parse_catalog_market_message(
+        """VENDA
+Passos do Sol (+1) Lv32 (DEF+7, HP+5)
+20🧀 / 60🧪 / 300k GOLD
+Lança Solar » 4🧀 / 12🧪 / 60k GOLD""",
+        candidates,
+    )
+    assert [(entry[1][2], entry[0].price_currency) for entry in matched] == [
+        ("Passos do Sol", "TOFU"),
+        ("Passos do Sol", "GOLD"),
+        ("Lança Solar", "TOFU"),
+        ("Lança Solar", "GOLD"),
+    ]
+
+
+def test_catalog_parser_does_not_attach_price_after_unknown_product_name():
+    candidates = [("soul", 2, "Lança Solar", "lanca solar")]
+    matched = parse_catalog_market_message(
+        "Lança Solar\nItem Desconhecido\n50🧀", candidates
+    )
+    assert matched == []
 
 
 def test_collector_is_disabled_by_default_without_touching_database(monkeypatch):
