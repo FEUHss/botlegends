@@ -1033,6 +1033,26 @@ def inicializar_banco():
                 ON CONFLICT (nome) DO NOTHING
             """, almas_iniciais)
             concluir_carga_inicial("almas_v1")
+
+        almas_novas_market = [
+            ("Lança Xamânica", "Arqueiro", "Lanceiro", "Lança", None,
+             "Efeito a confirmar.", False),
+            ("Benção do Clã", "Mago", "Suporte", "Varinha", None,
+             "Efeito a confirmar.", False),
+            ("Chama de Guerra", "Mago", "Cajado", "Cajado", None,
+             "Efeito a confirmar.", False),
+            ("Fúria de Khar'Gath", "Guerreiro", "Berserker", "Machado", None,
+             "Efeito a confirmar.", False),
+        ]
+        if not carga_inicial_concluida("almas_v2_market"):
+            cur.executemany("""
+                INSERT INTO almas_legends (
+                    nome, classe_base, especializacao, equipamento,
+                    recarga_turnos, efeito, confirmado
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (nome) DO NOTHING
+            """, almas_novas_market)
+            concluir_carga_inicial("almas_v2_market")
         conn.commit()
         print("0 - Estrutura do banco verificada")
     finally:
