@@ -32,6 +32,22 @@ def test_dungeon_name_does_not_guess_between_ambiguous_candidates():
 
 
 class ExtracaoMasmorraTests(unittest.TestCase):
+    def test_boss_com_nome_proprio_sem_prefixo_masmorra(self):
+        texto = """🗝 SANTUARIO DE ALTHERYN  Sala: 4/4 👑 Boss 🗝
+Aparição de Altheryn
+❤️ HP: 2470 / 2470  ID: D90C9F
+👥 Grupo ⚔ 46 🛡 18
+🧙 [CROW]Ryuarkano (Líder) — Nv. 31
+🧙 Vênus — Nv. 28"""
+
+        resultado = extrair_monstro_masmorra(texto)
+
+        self.assertEqual(resultado["masmorra"], "SANTUARIO DE ALTHERYN")
+        self.assertEqual(resultado["nome"], "Aparição de Altheryn")
+        self.assertEqual(resultado["hp_max"], 2470)
+        self.assertEqual(resultado["andar"], 4)
+        self.assertTrue(resultado["boss"])
+
     def test_subboss_preserva_andar_e_hp_maximo(self):
         texto = """🗝 MASMORRA DA PLANÍCIE  Sala: 1/4 🗝
 Lobo Alfa da Masmorra
