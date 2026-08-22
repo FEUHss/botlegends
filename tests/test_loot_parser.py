@@ -131,8 +131,34 @@ Lobo Alfa da Masmorra
             {"nome": "Slime Viscoso", "hp": 160},
         )
 
+    def test_encontro_de_guerra_da_fortaleza(self):
+        texto = """⚔ GUERRA — 🟢 Goblin vs Orcs
+👹 Orc Caçador
+❤️ 850/850
+🧑 O Rastreador
+❤️ 145/234"""
+
+        self.assertEqual(
+            extrair_monstro_combate(texto),
+            {"nome": "Orc Caçador", "hp": 850},
+        )
+
 
 class ExtracaoImagensAtlasTests(unittest.TestCase):
+    def test_criacao_de_sala_sem_linha_de_mapa(self):
+        texto = """⚔ Covil de Zul'gor
+
+Como deseja criar a sala?"""
+
+        self.assertEqual(
+            extrair_masmorra_visual(texto),
+            {
+                "nome": "Covil de Zul'gor",
+                "mapa": None,
+                "codigo_sala": None,
+            },
+        )
+
     def test_tela_principal_identifica_mapa(self):
         texto = """🏰 Planície (Lv 1)
 🧙 46 EremitaDeSantoBerço

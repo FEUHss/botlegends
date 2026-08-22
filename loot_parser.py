@@ -50,11 +50,19 @@ def correspondencia_aproximada(texto, candidatos, limiar=0.88, margem=0.05):
 
 
 def extrair_monstro_combate(texto):
-    """Extrai nome e HP do inimigo na tela 'COMBATE INICIADO'."""
+    """Extrai nome e HP de caçadas comuns e encontros de guerra."""
     linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
+
+    def cabecalho_de_encontro(linha):
+        limpa = normalizar(linha)
+        return (
+            "combate iniciado" in limpa
+            or bool(re.search(r"\bguerra\b.*\bvs\b", limpa))
+        )
+
     indice = next(
         (i for i, linha in enumerate(linhas)
-         if "combate iniciado" in normalizar(linha)),
+         if cabecalho_de_encontro(linha)),
         None,
     )
     if indice is None or indice + 1 >= len(linhas):
@@ -73,6 +81,8 @@ def extrair_monstro_combate(texto):
             hp = int(re.sub(r"\D", "", match.group(2)))
             break
 
+    if hp is None:
+        return None
     return {"nome": nome, "hp": hp}
 
 
@@ -174,6 +184,19 @@ def extrair_masmorra_visual(texto):
     """Reconhece a entrada ou o lobby de uma masmorra e remove o código da sala."""
     linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
     if not linhas:
+        return None
+
+    # Algumas masmorras exibem somente o nome e a pergunta de privacidade,
+    # sem a linha "Mapa:". O nome imediatamente anterior à pergunta é o
+    # identificador oficial que será resolvido no catálogo, sem criar dados.
+    for indice, linha in enumerate(linhas):
+        if "como deseja criar a sala" not in normalizar(linha):
+            continue
+        if indice == 0:
+            return None
+        nome = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[indice - 1]).strip()
+        if nome:
+            return {"nome": nome, "mapa": None, "codigo_sala": None}
         return None
 
     # Tela de entrada: nome e mapa aparecem explicitamente.
