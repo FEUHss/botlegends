@@ -1,4 +1,5 @@
 import os
+# Biblioteca com Criptas separadas do Atlas (implantação 2026-08-26).
 import re
 import random
 import hashlib
