@@ -13,6 +13,7 @@ from loot_parser import (
     extrair_mapa_visual,
     extrair_masmorra_visual,
     extrair_monstro_combate,
+    extrair_monstro_cripta,
     extrair_monstro_masmorra,
     normalizar,
 )
@@ -268,6 +269,17 @@ def inicializar_banco():
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS catalogo_criptas (
+            numero INTEGER PRIMARY KEY CHECK (numero BETWEEN 1 AND 3),
+            nome TEXT UNIQUE NOT NULL,
+            mapa_id BIGINT REFERENCES catalogo_mapas(id),
+            nivel_minimo INTEGER,
+            nivel_maximo INTEGER,
+            confirmado BOOLEAN NOT NULL DEFAULT TRUE,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS masmorra_aliases (
             id BIGSERIAL PRIMARY KEY,
             masmorra_id BIGINT NOT NULL REFERENCES catalogo_masmorras(id)
@@ -494,6 +506,44 @@ def inicializar_banco():
             ALTER TABLE catalogo_monstros
             ADD COLUMN IF NOT EXISTS masmorra_id BIGINT
                 REFERENCES catalogo_masmorras(id)
+        """)
+        cur.execute("""
+            ALTER TABLE catalogo_monstros
+            ADD COLUMN IF NOT EXISTS cripta_numero INTEGER,
+            ADD COLUMN IF NOT EXISTS habilidade TEXT,
+            ADD COLUMN IF NOT EXISTS sem_habilidade BOOLEAN NOT NULL DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS risco TEXT
+        """)
+        cur.execute("""
+            INSERT INTO catalogo_criptas
+                (numero, nome, mapa_id, nivel_minimo, nivel_maximo)
+            SELECT dados.numero, dados.nome, mp.id,
+                   dados.nivel_minimo, dados.nivel_maximo
+            FROM (VALUES
+                (1, 'Cripta 1', 22, 27),
+                (2, 'Cripta 2', NULL::INTEGER, NULL::INTEGER),
+                (3, 'Cripta 3', NULL::INTEGER, NULL::INTEGER)
+            ) AS dados(numero, nome, nivel_minimo, nivel_maximo)
+            LEFT JOIN catalogo_mapas mp ON mp.nome='Cemitério Antigo'
+            ON CONFLICT (numero) DO UPDATE SET
+                nome=EXCLUDED.nome,
+                mapa_id=COALESCE(catalogo_criptas.mapa_id, EXCLUDED.mapa_id),
+                nivel_minimo=COALESCE(catalogo_criptas.nivel_minimo, EXCLUDED.nivel_minimo),
+                nivel_maximo=COALESCE(catalogo_criptas.nivel_maximo, EXCLUDED.nivel_maximo),
+                atualizado_em=CURRENT_TIMESTAMP
+        """)
+        # Migração idempotente: reaproveita os sete registros já vinculados à
+        # antiga "Cripta II" sem mudar id, ordem, imagem ou relacionamentos.
+        cur.execute("""
+            UPDATE catalogo_monstros cm
+            SET tipo='Cripta', cripta_numero=2,
+                masmorra_id=NULL, masmorra_nome=NULL,
+                xp=NULL, gold=NULL,
+                atualizado_em=CURRENT_TIMESTAMP
+            FROM catalogo_masmorras d
+            WHERE cm.masmorra_id=d.id
+              AND d.tipo_sistema='cripta'
+              AND cm.cripta_numero IS NULL
         """)
         cur.execute("""
             ALTER TABLE masmorra_imagens
@@ -2509,6 +2559,68 @@ async def processar_imagem_monstro(msg):
         return False
 
     texto = msg.caption or msg.text or ""
+    dados_cripta = extrair_monstro_cripta(texto)
+    if dados_cripta:
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                SELECT cm.id, cm.nome, cm.mapa_id
+                FROM catalogo_monstros cm
+                WHERE cm.cripta_numero=%s
+                  AND LOWER(cm.tipo)=LOWER('Cripta')
+                ORDER BY cm.id
+            """, (dados_cripta["cripta_numero"],))
+            registros = cur.fetchall()
+            procurado = normalizar(dados_cripta["nome"])
+            exatos = [row for row in registros if normalizar(row[1]) == procurado]
+            monstro = exatos[0] if len(exatos) == 1 else correspondencia_aproximada(
+                dados_cripta["nome"], [(row, [row[1]]) for row in registros]
+            )
+            if not monstro:
+                await msg.reply_text(
+                    "⚠️ Este monstro ainda não está cadastrado na Cripta "
+                    f"{dados_cripta['cripta_numero']}. A imagem não foi salva."
+                )
+                return True
+            monstro_id, nome_catalogo, _ = monstro
+            nome_recebido = dados_cripta["nome"].strip()
+            if normalizar(nome_catalogo) != normalizar(nome_recebido):
+                cur.execute("""
+                    INSERT INTO monstro_aliases
+                        (alias_normalizado, alias, monstro_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (alias_normalizado) DO UPDATE SET
+                        alias=EXCLUDED.alias, monstro_id=EXCLUDED.monstro_id
+                """, (normalizar(nome_recebido), nome_recebido, monstro_id))
+            foto = msg.photo[-1]
+            cur.execute("""
+                INSERT INTO monstro_imagens
+                    (monstro_id, telegram_file_id, telegram_file_unique_id,
+                     nome_detectado, hp_detectado)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (telegram_file_unique_id) DO UPDATE SET
+                    monstro_id=EXCLUDED.monstro_id,
+                    telegram_file_id=EXCLUDED.telegram_file_id,
+                    nome_detectado=EXCLUDED.nome_detectado,
+                    hp_detectado=EXCLUDED.hp_detectado,
+                    atualizado_em=CURRENT_TIMESTAMP
+            """, (monstro_id, foto.file_id, foto.file_unique_id,
+                  nome_recebido, dados_cripta["hp_max"]))
+            conn.commit()
+            await msg.reply_text(
+                f"✅ Imagem salva para {nome_catalogo}.\n"
+                f"🗝️ Cripta {dados_cripta['cripta_numero']}\n"
+                "ℹ️ O HP não foi fixado, pois varia conforme o avanço na Cripta."
+            )
+            return True
+        except Exception as erro:
+            conn.rollback()
+            print(f"Erro ao salvar imagem de monstro da cripta: {erro!r}", flush=True)
+            await msg.reply_text("⚠️ Não consegui salvar esta imagem da Cripta.")
+            return True
+        finally:
+            cur.close()
+
     dados_masmorra = extrair_monstro_masmorra(texto)
     if dados_masmorra:
         return await processar_imagem_monstro_masmorra(msg, dados_masmorra)
@@ -2916,7 +3028,7 @@ async def processar_busca_biblioteca(update, context):
 
         cur.execute("""
             SELECT cm.id, cm.nome, cm.mapa_id, mp.nome, cm.tipo,
-                   cm.masmorra_id
+                   cm.masmorra_id, cm.cripta_numero
             FROM catalogo_monstros cm
             JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
             WHERE cm.nome ILIKE %s
@@ -2951,11 +3063,16 @@ async def processar_busca_biblioteca(update, context):
             f"🎒 {nome}",
             callback_data=f"item_{item_id}_{classe}_{categoria}",
         )])
-    for monstro_id, nome, mapa_id, mapa, tipo, masmorra_id in monstros:
-        area = codigo_area_monstro_atlas(tipo, masmorra_id)
+    for monstro_id, nome, mapa_id, mapa, tipo, masmorra_id, cripta_numero in monstros:
+        if (tipo or "").lower() == "cripta" and cripta_numero:
+            destino = f"cripta_m_{monstro_id}"
+            local = f"Cripta {cripta_numero}"
+        else:
+            area = codigo_area_monstro_atlas(tipo, masmorra_id)
+            destino = f"atlas_x_{monstro_id}_{mapa_id}_{area}"
+            local = mapa
         linhas.append([InlineKeyboardButton(
-            f"👹 {nome} — {mapa}",
-            callback_data=f"atlas_x_{monstro_id}_{mapa_id}_{area}",
+            f"👹 {nome} — {local}", callback_data=destino,
         )])
     for mapa_id, nome in mapas:
         linhas.append([InlineKeyboardButton(
@@ -3991,6 +4108,7 @@ async def editar_pagina_biblioteca(
 def teclado_inicio_unificado():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🗺️ Atlas", callback_data="lib_atlas")],
+        [InlineKeyboardButton("🗝️ Criptas", callback_data="lib_criptas")],
         [InlineKeyboardButton("🎒 Itens", callback_data="lib_itens")],
         [InlineKeyboardButton("✨ Almas", callback_data="lib_almas")],
         [InlineKeyboardButton("🔎 Buscar", callback_data="lib_buscar")],
@@ -4000,7 +4118,7 @@ def teclado_inicio_unificado():
 async def mostrar_inicio_unificado(alvo, editar=False):
     texto = (
         "📚 BIBLIOTECA LEGENDS\n\n"
-        "Explore mapas, monstros, itens e almas catalogados pela guilda."
+        "Explore o Atlas, as Criptas, os itens e as almas catalogados pela guilda."
     )
     if editar:
         await editar_pagina_biblioteca(
@@ -4113,6 +4231,116 @@ async def mostrar_alma(query, alma_id):
         )],
         [InlineKeyboardButton("📚 Biblioteca", callback_data="lib_inicio")],
     ])
+
+
+async def mostrar_inicio_criptas(alvo):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT c.numero, c.nome, c.nivel_minimo, c.nivel_maximo,
+                   COUNT(cm.id)
+            FROM catalogo_criptas c
+            LEFT JOIN catalogo_monstros cm
+              ON cm.cripta_numero=c.numero
+             AND LOWER(cm.tipo)=LOWER('Cripta')
+            GROUP BY c.numero, c.nome, c.nivel_minimo, c.nivel_maximo
+            ORDER BY c.numero
+        """)
+        criptas = cur.fetchall()
+    finally:
+        cur.close()
+    botoes = []
+    for numero, nome, nivel_minimo, nivel_maximo, total in criptas:
+        nivel = (
+            f"Nv {nivel_minimo}–{nivel_maximo}"
+            if nivel_minimo is not None and nivel_maximo is not None
+            else "nível a confirmar"
+        )
+        botoes.append([InlineKeyboardButton(
+            f"🗝️ {nome} · {nivel} ({total})", callback_data=f"cripta_{numero}"
+        )])
+    botoes.append([InlineKeyboardButton("⬅ Biblioteca", callback_data="lib_inicio")])
+    await editar_pagina_biblioteca(
+        alvo, "atlas", "🗝️ CRIPTAS LEGENDS\n\nEscolha uma Cripta:",
+        InlineKeyboardMarkup(botoes),
+    )
+
+
+async def mostrar_monstros_cripta(alvo, numero):
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT nome, nivel_minimo, nivel_maximo FROM catalogo_criptas WHERE numero=%s", (numero,))
+        cripta = cur.fetchone()
+        if not cripta:
+            await mostrar_inicio_criptas(alvo)
+            return
+        cur.execute("""
+            SELECT id, nome FROM catalogo_monstros
+            WHERE cripta_numero=%s AND LOWER(tipo)=LOWER('Cripta')
+            ORDER BY ordem, id
+        """, (numero,))
+        monstros = cur.fetchall()
+    finally:
+        cur.close()
+    nome, nivel_minimo, nivel_maximo = cripta
+    nivel = (
+        f"Nível recomendado: {nivel_minimo}–{nivel_maximo}"
+        if nivel_minimo is not None and nivel_maximo is not None
+        else "Nível recomendado: a confirmar"
+    )
+    botoes = [[InlineKeyboardButton(
+        f"👹 {nome_monstro}", callback_data=f"cripta_m_{monstro_id}"
+    )] for monstro_id, nome_monstro in monstros]
+    botoes.append([InlineKeyboardButton("⬅ Criptas", callback_data="lib_criptas")])
+    instrucao = "Escolha um monstro:" if monstros else "Nenhum monstro cadastrado por enquanto."
+    await editar_pagina_biblioteca(
+        alvo, "atlas", f"🗝️ {nome.upper()}\n{nivel}\n\n{instrucao}",
+        InlineKeyboardMarkup(botoes),
+    )
+
+
+async def mostrar_monstro_cripta(alvo, monstro_id):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT cm.nome, cm.cripta_numero, c.nome, mp.nome,
+                   cm.habilidade, cm.sem_habilidade, cm.risco,
+                   mi.telegram_file_id, mi.telegram_file_unique_id
+            FROM catalogo_monstros cm
+            JOIN catalogo_criptas c ON c.numero=cm.cripta_numero
+            LEFT JOIN catalogo_mapas mp ON mp.id=c.mapa_id
+            LEFT JOIN LATERAL (
+                SELECT telegram_file_id, telegram_file_unique_id
+                FROM monstro_imagens WHERE monstro_id=cm.id
+                ORDER BY atualizado_em DESC LIMIT 1
+            ) mi ON TRUE
+            WHERE cm.id=%s AND LOWER(cm.tipo)=LOWER('Cripta')
+        """, (monstro_id,))
+        monstro = cur.fetchone()
+    finally:
+        cur.close()
+    if not monstro:
+        await mostrar_inicio_criptas(alvo)
+        return
+    nome, numero, nome_cripta, mapa, habilidade, sem_habilidade, risco, file_id, unique_id = monstro
+    habilidade_texto = "Sem habilidade" if sem_habilidade else (habilidade or "a confirmar")
+    risco_texto = risco or "a confirmar"
+    alerta = ""
+    if risco and risco.casefold() == "alto":
+        alerta = "\n\n⚠️ ALERTA: monstro de risco alto."
+    texto = (
+        f"👹 {nome.upper()}\n\n🗝️ {nome_cripta}\n"
+        f"🗺️ Local: {mapa or 'Cemitério Antigo'}\n"
+        f"✨ Habilidade: {habilidade_texto}\n"
+        f"⚠️ Risco: {risco_texto}{alerta}"
+    )
+    teclado = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅ Monstros da Cripta", callback_data=f"cripta_{numero}")],
+        [InlineKeyboardButton("🗝️ Todas as Criptas", callback_data="lib_criptas")],
+    ])
+    await editar_pagina_biblioteca(
+        alvo, "atlas", texto, teclado, file_id=file_id, file_unique_id=unique_id
+    )
     await editar_pagina_biblioteca(query, midia, texto, teclado)
 
 
@@ -4179,6 +4407,7 @@ def masmorras_do_mapa_atlas(nome_mapa):
             FROM catalogo_masmorras d
             JOIN catalogo_mapas mp ON mp.id=d.mapa_id
             WHERE mp.nome=%s
+              AND COALESCE(d.tipo_sistema, 'masmorra') <> 'cripta'
             ORDER BY d.ordem, d.id
         """, (nome_mapa,))
         return [row[0] for row in cur.fetchall()]
@@ -4213,6 +4442,7 @@ def resolver_area_atlas(cur, mapa_id, codigo_area):
             SELECT nome
             FROM catalogo_masmorras
             WHERE id=%s AND mapa_id=%s
+              AND COALESCE(tipo_sistema, 'masmorra') <> 'cripta'
         """, (masmorra_id, mapa_id))
         row = cur.fetchone()
         return (row[0], masmorra_id) if row else (None, None)
@@ -4225,6 +4455,7 @@ def resolver_area_atlas(cur, mapa_id, codigo_area):
             SELECT id, nome
             FROM catalogo_masmorras
             WHERE mapa_id=%s
+              AND COALESCE(tipo_sistema, 'masmorra') <> 'cripta'
             ORDER BY ordem, id
             OFFSET %s LIMIT 1
         """, (mapa_id, indice))
@@ -4311,6 +4542,7 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
                   ON cm.masmorra_id=d.id
                  AND LOWER(cm.tipo)=LOWER('Masmorra')
                 WHERE d.mapa_id=%s
+                  AND COALESCE(d.tipo_sistema, 'masmorra') <> 'cripta'
                 GROUP BY d.id, d.nome, d.ordem
                 ORDER BY d.ordem, d.id
             """, (mapa_id,))
@@ -4622,7 +4854,7 @@ async def mostrar_monstro_atlas(
             else formatar_valor_catalogo(hp)
         )
 
-        eh_masmorra = (tipo or "").lower() == "masmorra"
+        eh_masmorra = (tipo or "").lower() in {"masmorra", "cripta"}
         texto = (
             f"👹 MONSTRO {ordem} — {nome}\n\n"
             f"🗺️ {mapa}   🏷️ {tipo or 'a confirmar'}   "
@@ -4808,7 +5040,7 @@ async def cmd_monstro(update, context):
         """, (monstro_id,))
         drops_relacionados = [row[0] for row in cur.fetchall()]
 
-        eh_masmorra = (tipo or "").lower() == "masmorra"
+        eh_masmorra = (tipo or "").lower() in {"masmorra", "cripta"}
         linhas = [
             f"👹 MONSTRO {numero} — {nome}",
             "",
@@ -5418,6 +5650,27 @@ async def callback_biblioteca(update, context):
             "🎒 ITENS DA BIBLIOTECA\n\nEscolha uma categoria:",
             reply_markup=teclado_inicio_biblioteca(),
         )
+        return
+
+    if dados == "lib_criptas":
+        context.user_data.pop("biblioteca_busca_msg_id", None)
+        await mostrar_inicio_criptas(query)
+        return
+
+    if dados.startswith("cripta_m_"):
+        try:
+            monstro_id = int(dados.removeprefix("cripta_m_"))
+        except ValueError:
+            return
+        await mostrar_monstro_cripta(query, monstro_id)
+        return
+
+    if dados.startswith("cripta_"):
+        try:
+            numero = int(dados.removeprefix("cripta_"))
+        except ValueError:
+            return
+        await mostrar_monstros_cripta(query, numero)
         return
 
     if dados == "lib_almas":
