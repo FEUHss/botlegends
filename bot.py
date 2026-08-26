@@ -4016,7 +4016,7 @@ ESPECIALIZACOES_ALMAS = {
 def teclado_especializacoes_almas():
     botoes = []
     pares = [
-        ("berserker", "paladino"),
+        ("berserker", "tank"),
         ("cacador", "lanceiro"),
         ("cajado", "suporte"),
     ]
