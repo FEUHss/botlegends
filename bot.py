@@ -461,8 +461,30 @@ def inicializar_banco():
         )
         estado_inicial_catalogo("almas_v1", "almas_legends")
         cur.execute("""
+            SELECT inicializado FROM catalogo_estado
+            WHERE chave='capacidades_masmorras_v1'
+        """)
+        estado_capacidades = cur.fetchone()
+        capacidades_masmorras_ja_inicializadas = bool(
+            estado_capacidades and estado_capacidades[0]
+        )
+        if estado_capacidades is None:
+            cur.execute("""
+                INSERT INTO catalogo_estado (chave, inicializado)
+                VALUES ('capacidades_masmorras_v1', FALSE)
+            """)
+        cur.execute("""
             ALTER TABLE almas_legends
             ADD COLUMN IF NOT EXISTS obtencao TEXT
+        """)
+        cur.execute("""
+            ALTER TABLE catalogo_masmorras
+            ADD COLUMN IF NOT EXISTS minimo_jogadores INTEGER,
+            ADD COLUMN IF NOT EXISTS maximo_jogadores INTEGER,
+            ADD COLUMN IF NOT EXISTS xp_por_equipe JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS tipo_sistema TEXT NOT NULL DEFAULT 'masmorra',
+            ADD COLUMN IF NOT EXISTS requisitos_texto TEXT,
+            ADD COLUMN IF NOT EXISTS observacoes TEXT
         """)
         cur.execute("""
             ALTER TABLE catalogo_monstros
@@ -599,6 +621,39 @@ def inicializar_banco():
                 ON CONFLICT (alias_normalizado) DO NOTHING
             """)
             concluir_carga_inicial("mapas_e_masmorras_v1")
+
+        if not capacidades_masmorras_ja_inicializadas:
+            configuracoes_masmorras = [
+                (1, 5, "masmorra", None, None, "Planície", "Masmorra da Planície"),
+                (1, 5, "masmorra", "Pele de Orc (F) ou (M).", None, "Planície", "Covil de Zul'gor"),
+                (1, 5, "masmorra", None, None, "Floresta Sombria", "Masmorra da Floresta"),
+                (1, 5, "masmorra", "Culpa de Altheryn (F) ou (M).", None, "Floresta Sombria", "Santuário de Altheryn"),
+                (1, 5, "masmorra", None, None, "Pântano", "Masmorra do Pântano"),
+                (1, 5, "masmorra", "Hydra Slayer (Guerreiro), (Mago) ou (Arqueiro).", None, "Pântano", "Covil da Hydra Maior"),
+                (1, 5, "masmorra", "Uma skin Hydra Slayer e uma skin Cavaleiro das Sombras, nas versões Guerreiro, Mago ou Arqueiro, juntas no mesmo time.", None, "Pântano", "Covil da Hydra de Ossos"),
+                (1, 5, "masmorra", "Chave especial: Chave do Ossuário.", None, "Cemitério Antigo", "Covil do Lord"),
+                (None, None, "cripta", None, "Sistema especial de criptas infinitas; será modelado separadamente.", "Cemitério Antigo", "Cripta II"),
+                (1, 5, "masmorra", None, None, "Deserto Escaldante", "Pirâmide do Deserto"),
+                (1, 1, "masmorra", None, None, "Oásis Perdido", "Fenda Solar"),
+                (2, 2, "masmorra", None, None, "Oásis Perdido", "Templo do Oásis"),
+                (1, 5, "masmorra", None, None, "Montanhas Gélidas", "Ruínas de Azulgor"),
+                (1, 5, "masmorra", None, None, "Montanhas Gélidas", "Lago de Kryos"),
+                (1, 5, "masmorra", None, None, "Montanhas Gélidas", "Túneis Proibidos"),
+                (1, 5, "masmorra", None, None, "Fortaleza dos Orcs", "Fosso de Provas"),
+                (1, 5, "masmorra", None, None, "Fortaleza dos Orcs", "Trono de Khar'gath"),
+            ]
+            cur.executemany("""
+                UPDATE catalogo_masmorras d
+                SET minimo_jogadores=%s,
+                    maximo_jogadores=%s,
+                    tipo_sistema=%s,
+                    requisitos_texto=%s,
+                    observacoes=%s,
+                    atualizado_em=CURRENT_TIMESTAMP
+                FROM catalogo_mapas mp
+                WHERE d.mapa_id=mp.id AND mp.nome=%s AND d.nome=%s
+            """, configuracoes_masmorras)
+            concluir_carga_inicial("capacidades_masmorras_v1")
 
         monstros_iniciais = [
             # Planície — caçada
@@ -4282,7 +4337,7 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
             for masmorra_id, nome_masmorra, quantidade in masmorras:
                 linhas.append([InlineKeyboardButton(
                     f"🗝️ {nome_masmorra} ({quantidade})",
-                    callback_data=f"atlas_t_{mapa_id}_r{masmorra_id}"
+                    callback_data=f"atlas_d_{mapa_id}_{masmorra_id}"
                 )])
             linhas.append([
                 InlineKeyboardButton("⬅️ Mapas", callback_data="atlas_inicio")
@@ -4310,6 +4365,102 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
                 file_id=imagem_mapa[0] if imagem_mapa else None,
                 file_unique_id=imagem_mapa[1] if imagem_mapa else None,
             )
+    finally:
+        cur.close()
+
+
+def texto_capacidade_masmorra(minimo, maximo):
+    if minimo is None or maximo is None:
+        return "a confirmar"
+    if minimo == maximo == 1:
+        return "1 jogador"
+    if minimo == maximo:
+        return f"{minimo} jogadores"
+    return f"{minimo} a {maximo} jogadores"
+
+
+async def mostrar_resumo_masmorra_atlas(alvo, mapa_id, masmorra_id):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT d.nome, mp.nome, d.minimo_jogadores,
+                   d.maximo_jogadores, d.xp_por_equipe,
+                   d.tipo_sistema, d.requisitos_texto, d.observacoes,
+                   COUNT(cm.id)
+            FROM catalogo_masmorras d
+            JOIN catalogo_mapas mp ON mp.id=d.mapa_id
+            LEFT JOIN catalogo_monstros cm
+              ON cm.masmorra_id=d.id
+             AND LOWER(cm.tipo)=LOWER('Masmorra')
+            WHERE d.id=%s AND d.mapa_id=%s
+            GROUP BY d.id, mp.nome
+        """, (masmorra_id, mapa_id))
+        masmorra = cur.fetchone()
+        if not masmorra:
+            await mostrar_mapa_atlas(alvo, mapa_id, editar=True)
+            return
+
+        (nome, mapa, minimo, maximo, xp_por_equipe, tipo_sistema,
+         requisitos, observacoes, total_monstros) = masmorra
+        cur.execute("""
+            SELECT telegram_file_id, telegram_file_unique_id
+            FROM masmorra_imagens
+            WHERE mapa_id=%s
+              AND (masmorra_id=%s OR
+                   (masmorra_id IS NULL AND nome_masmorra=%s))
+            ORDER BY atualizado_em DESC
+            LIMIT 1
+        """, (mapa_id, masmorra_id, nome))
+        imagem = cur.fetchone()
+
+        xp_por_equipe = xp_por_equipe or {}
+        linhas_xp = []
+        for quantidade in range(1, 6):
+            valor = xp_por_equipe.get(str(quantidade))
+            if valor is None:
+                valor = xp_por_equipe.get(quantidade)
+            if valor is not None:
+                linhas_xp.append(
+                    f"• {quantidade} jogador{'es' if quantidade != 1 else ''}: "
+                    f"{formatar_valor_catalogo(valor)} XP"
+                )
+
+        tipo = "Cripta — sistema especial" if tipo_sistema == "cripta" else "Masmorra"
+        texto = (
+            f"🗝️ {nome.upper()}\n\n"
+            f"🗺️ Mapa: {mapa}\n"
+            f"🏛️ Tipo: {tipo}\n"
+            f"👥 Grupo permitido: {texto_capacidade_masmorra(minimo, maximo)}\n\n"
+            f"⭐ XP POR TAMANHO DA EQUIPE\n"
+            f"{chr(10).join(linhas_xp) if linhas_xp else '• Valores ainda não informados'}"
+        )
+        if requisitos:
+            texto += f"\n\n🔐 Requisito de entrada: {requisitos}"
+        if observacoes:
+            texto += f"\n\n📝 {observacoes}"
+
+        rotulo_monstros = (
+            f"📜 Ver registros atuais ({total_monstros})"
+            if tipo_sistema == "cripta"
+            else f"👹 Ver monstros ({total_monstros})"
+        )
+        teclado = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                rotulo_monstros,
+                callback_data=f"atlas_t_{mapa_id}_r{masmorra_id}",
+            )],
+            [InlineKeyboardButton(
+                f"⬅️ {mapa}", callback_data=f"atlas_m_{mapa_id}"
+            )],
+        ])
+        await editar_pagina_biblioteca(
+            alvo,
+            "atlas",
+            texto,
+            teclado,
+            file_id=imagem[0] if imagem else None,
+            file_unique_id=imagem[1] if imagem else None,
+        )
     finally:
         cur.close()
 
@@ -4378,11 +4529,15 @@ async def mostrar_monstros_atlas(alvo, mapa_id, codigo_area):
             for ordem, monstro_id, nome in monstros
         ]
         linhas = agrupar_botoes_atlas(botoes)
-        linhas.append([
-            InlineKeyboardButton(
+        if masmorra_id:
+            linhas.append([InlineKeyboardButton(
+                "⬅️ Resumo da masmorra",
+                callback_data=f"atlas_d_{mapa_id}_{masmorra_id}",
+            )])
+        else:
+            linhas.append([InlineKeyboardButton(
                 f"⬅️ {nome_mapa}", callback_data=f"atlas_m_{mapa_id}"
-            )
-        ])
+            )])
         instrucao = (
             "Escolha um monstro:"
             if monstros
@@ -4541,6 +4696,11 @@ async def callback_atlas(update, context):
             await mostrar_inicio_atlas(query, editar=True)
         elif dados.startswith("atlas_m_"):
             await mostrar_mapa_atlas(query, int(dados.split("_")[2]), editar=True)
+        elif dados.startswith("atlas_d_"):
+            _, _, mapa_id, masmorra_id = dados.split("_")
+            await mostrar_resumo_masmorra_atlas(
+                query, int(mapa_id), int(masmorra_id)
+            )
         elif dados.startswith("atlas_t_"):
             _, _, mapa_id, codigo_area = dados.split("_")
             # Compatibilidade com botões da primeira versão do Atlas.
