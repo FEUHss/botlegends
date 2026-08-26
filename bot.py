@@ -826,6 +826,15 @@ def inicializar_banco():
             ])
             concluir_carga_inicial("monstros_v1")
 
+        # XP de masmorra pertence ao resumo da atividade, não a cada monstro.
+        # O Gold varia por execução e também não é um atributo do monstro.
+        cur.execute("""
+            UPDATE catalogo_monstros
+            SET xp=NULL, gold=NULL, atualizado_em=CURRENT_TIMESTAMP
+            WHERE LOWER(tipo)=LOWER('Masmorra')
+              AND (xp IS NOT NULL OR gold IS NOT NULL)
+        """)
+
         # Vincula o catálogo legado às masmorras canônicas sem apagar imagens
         # ou observações. Nomes recebidos com caixa/acentuação diferentes são
         # normalizados antes da associação.
@@ -4613,6 +4622,7 @@ async def mostrar_monstro_atlas(
             else formatar_valor_catalogo(hp)
         )
 
+        eh_masmorra = (tipo or "").lower() == "masmorra"
         texto = (
             f"👹 MONSTRO {ordem} — {nome}\n\n"
             f"🗺️ {mapa}   🏷️ {tipo or 'a confirmar'}   "
@@ -4620,10 +4630,13 @@ async def mostrar_monstro_atlas(
             f"❤️ HP: {hp_principal}   "
             f"⚔️ ATK: {formatar_valor_catalogo(atk)}   "
             f"🛡️ DEF: {formatar_valor_catalogo(defesa)}\n"
-            f"⭐ XP: {formatar_valor_catalogo(xp)}   "
-            f"💰 Gold: {formatar_valor_catalogo(gold)}\n"
         )
-        if (tipo or "").lower() == "masmorra":
+        if not eh_masmorra:
+            texto += (
+                f"⭐ XP: {formatar_valor_catalogo(xp)}   "
+                f"💰 Gold: {formatar_valor_catalogo(gold)}\n"
+            )
+        if eh_masmorra:
             hp_por_andar = {
                 andar: (minimo, maximo)
                 for andar, minimo, maximo, _ in observacoes_hp
@@ -4795,13 +4808,19 @@ async def cmd_monstro(update, context):
         """, (monstro_id,))
         drops_relacionados = [row[0] for row in cur.fetchall()]
 
+        eh_masmorra = (tipo or "").lower() == "masmorra"
         linhas = [
             f"👹 MONSTRO {numero} — {nome}",
             "",
             f"🗺️ Mapa: {mapa or 'a confirmar'}   🏷️ Tipo: {tipo or 'a confirmar'}   💠 Raridade: {raridade or 'a confirmar'}",
             f"❤️ HP: {formatar_valor_catalogo(hp)}   ⚔️ ATK: {formatar_valor_catalogo(atk)}   🛡️ DEF: {formatar_valor_catalogo(defesa)}",
-            f"⭐ XP: {formatar_valor_catalogo(xp)}   💰 Gold: {formatar_valor_catalogo(gold)}",
         ]
+
+        if not eh_masmorra:
+            linhas.append(
+                f"⭐ XP: {formatar_valor_catalogo(xp)}   "
+                f"💰 Gold: {formatar_valor_catalogo(gold)}"
+            )
 
         if drops_relacionados:
             linhas.append(f"🎁 Drops conhecidos: {len(drops_relacionados)}")
