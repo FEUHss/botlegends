@@ -107,6 +107,18 @@ def extrair_monstro_masmorra(texto):
             indice = posicao
             break
 
+    especial = False
+    if cabecalho is None:
+        padrao_especial = re.compile(r"^(.+?)\s+[—-]\s*Boss(?:\s+.*)?$", re.IGNORECASE)
+        for posicao, linha in enumerate(linhas):
+            limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+            match = padrao_especial.search(limpa)
+            if match:
+                cabecalho = match
+                indice = posicao
+                especial = True
+                break
+
     if cabecalho is None or indice is None or indice + 1 >= len(linhas):
         return None
 
@@ -137,8 +149,8 @@ def extrair_monstro_masmorra(texto):
         if re.search(r"—\s*Nv\.\s*\d+", linha, re.IGNORECASE)
     )
 
-    andar = int(cabecalho.group(2))
-    total_andares = int(cabecalho.group(3))
+    andar = 1 if especial else int(cabecalho.group(2))
+    total_andares = 1 if especial else int(cabecalho.group(3))
     nome_masmorra = cabecalho.group(1).strip()
     if normalizar(nome_masmorra).startswith("masmorra "):
         nome_masmorra = re.sub(
@@ -149,13 +161,45 @@ def extrair_monstro_masmorra(texto):
         "masmorra": nome_masmorra,
         "andar": andar,
         "total_andares": total_andares,
-        "boss": andar == total_andares,
+        "boss": especial or andar == total_andares,
         "nome": nome,
         "hp_atual": hp_atual,
         "hp_max": hp_maximo,
         "codigo_execucao": codigo_execucao,
         "tamanho_grupo": tamanho_grupo or None,
     }
+
+
+def extrair_monstro_cripta(texto):
+    """Extrai a cripta e o monstro; Kill/Q é progresso e não identidade."""
+    linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
+    romanos = {"I": 1, "II": 2, "III": 3}
+    for indice, linha in enumerate(linhas):
+        limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+        match = re.match(r"CRIPTA\s+(I{1,3}|[123])\b", limpa, re.IGNORECASE)
+        if not match or indice + 1 >= len(linhas):
+            continue
+        marcador = match.group(1).upper()
+        numero = romanos.get(marcador, int(marcador) if marcador.isdigit() else None)
+        nome = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[indice + 1]).strip()
+        if not nome:
+            return None
+        hp_atual = hp_maximo = None
+        for seguinte in linhas[indice + 2:]:
+            if normalizar(seguinte).startswith("grupo"):
+                break
+            match_hp = re.search(r"HP:\s*([\d.,]+)\s*/\s*([\d.,]+)", seguinte, re.IGNORECASE)
+            if match_hp:
+                hp_atual = int(re.sub(r"\D", "", match_hp.group(1)))
+                hp_maximo = int(re.sub(r"\D", "", match_hp.group(2)))
+                break
+        return {
+            "cripta_numero": numero,
+            "nome": nome,
+            "hp_atual": hp_atual,
+            "hp_max": hp_maximo,
+        }
+    return None
 
 
 def extrair_mapa_visual(texto):
@@ -199,19 +243,20 @@ def extrair_masmorra_visual(texto):
             return {"nome": nome, "mapa": None, "codigo_sala": None}
         return None
 
-    # Tela de entrada: nome e mapa aparecem explicitamente.
-    if "crie uma sala" in normalizar(texto):
-        nome = None
-        mapa = None
-        for linha in linhas:
-            limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
-            if normalizar(limpa).startswith("masmorra ") and nome is None:
-                nome = limpa
-            match_mapa = re.match(r"Mapa:\s*(.+)$", limpa, re.IGNORECASE)
-            if match_mapa:
-                mapa = match_mapa.group(1).strip()
-        if nome and mapa:
-            return {"nome": nome, "mapa": mapa, "codigo_sala": None}
+    # Tela de entrada: qualquer masmorra cadastrada pode ter nome próprio
+    # (Pirâmide, Covil, Fenda etc.). A linha imediatamente anterior a "Mapa:"
+    # é o nome exibido pelo jogo. A resolução posterior só aceita cadastros reais.
+    for indice, linha in enumerate(linhas):
+        limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
+        match_mapa = re.match(r"Mapa:\s*(.+)$", limpa, re.IGNORECASE)
+        if match_mapa and indice > 0:
+            nome = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[indice - 1]).strip()
+            if nome:
+                return {
+                    "nome": nome,
+                    "mapa": match_mapa.group(1).strip(),
+                    "codigo_sala": None,
+                }
 
     # Lobby criado: o cabeçalho termina em um código hexadecimal temporário.
     if "membros (" in normalizar(texto) and "marque-se como pronto" in normalizar(texto):
