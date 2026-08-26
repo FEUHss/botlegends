@@ -459,9 +459,11 @@ def inicializar_banco():
         itens_ja_inicializados = estado_inicial_catalogo(
             "itens_v1", "itens_legends"
         )
-        almas_ja_inicializadas = estado_inicial_catalogo(
-            "almas_v1", "almas_legends"
-        )
+        estado_inicial_catalogo("almas_v1", "almas_legends")
+        cur.execute("""
+            ALTER TABLE almas_legends
+            ADD COLUMN IF NOT EXISTS obtencao TEXT
+        """)
         cur.execute("""
             ALTER TABLE catalogo_monstros
             ADD COLUMN IF NOT EXISTS masmorra_nome TEXT
@@ -986,71 +988,87 @@ def inicializar_banco():
         if not itens_ja_inicializados:
             concluir_carga_inicial("itens_v1")
 
-        almas_iniciais = [
-            ("Fúria do Lobo", "Guerreiro", "Berserker", "Machado", 3,
-             "Golpe fortalecido e aumento temporário de ATK.", False),
-            ("Golpe Sombrio", "Guerreiro", "Berserker", "Machado", 4,
-             "Golpe fortalecido que recupera parte do dano como HP.", False),
-            ("Fúria do Titã", "Guerreiro", "Berserker", "Machado", 5,
-             "O próximo golpe causa 2x de dano.", True),
-            ("Rugido do Rochedo", "Guerreiro", "Paladino", "Espada e Escudo", 4,
-             "Reduz o dano recebido por 2 turnos e provoca o inimigo.", False),
-            ("Escudo de Ossos", "Guerreiro", "Paladino", "Espada e Escudo", 5,
-             "Recupera uma parcela elevada do HP máximo.", False),
-            ("Golpe do Obelisco", "Guerreiro", "Paladino", "Espada e Escudo", 6,
-             "Golpe fortalecido com dano adicional baseado na DEF.", False),
-            ("Picada da Aranha", "Arqueiro", "Caçador", "Arco", 4,
-             "Golpe fortalecido que aplica veneno por 2 turnos.", False),
-            ("Precisão Élfica", "Arqueiro", "Caçador", "Arco", 6,
-             "Aprimora o acerto crítico do próximo ataque.", False),
-            ("Flecha do Djinn", "Arqueiro", "Caçador", "Arco", 6,
-             "Golpe fortalecido que ignora parte da DEF do inimigo.", False),
-            ("Lança dos Ventos", "Arqueiro", "Lanceiro", "Lança", 3,
-             "Golpe fortalecido com recuperação de vida.", False),
-            ("Lança do Guardião", "Arqueiro", "Lanceiro", "Lança", 4,
-             "Reduz o dano recebido e provoca o inimigo.", False),
-            ("Lança Solar", "Arqueiro", "Lanceiro", "Lança", 6,
-             "Golpe fortalecido com dano adicional baseado no HP máximo.", False),
-            ("Maldição da Bruxa", "Mago", "Cajado", "Cajado", 4,
-             "Golpe fortalecido que aplica uma maldição temporária.", False),
-            ("Poder do Lich", "Mago", "Cajado", "Cajado", 5,
-             "Golpe fortalecido e aumento temporário de ATK.", False),
-            ("Tempestade de Areia", "Mago", "Cajado", "Cajado", 6,
-             "O próximo golpe causa 2x de dano.", True),
-            ("Escudo Arcano", "Mago", "Suporte", "Varinha", 4,
-             "Reduz o dano recebido pelo grupo por 3 turnos.", False),
-            ("Vontade do Lich", "Mago", "Suporte", "Varinha", 4,
-             "Recupera uma parcela do HP máximo do grupo.", False),
-            ("Orbe Solar", "Mago", "Suporte", "Varinha", 3,
-             "Golpe fortalecido e aumento temporário do ATK do grupo.", False),
-        ]
-        if not almas_ja_inicializadas:
-            cur.executemany("""
-                INSERT INTO almas_legends (
-                    nome, classe_base, especializacao, equipamento,
-                    recarga_turnos, efeito, confirmado
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (nome) DO NOTHING
-            """, almas_iniciais)
-            concluir_carga_inicial("almas_v1")
+        # Corrige a grafia provisória sem criar uma segunda alma nem trocar seu ID.
+        cur.execute("""
+            UPDATE almas_legends
+            SET nome='Bênção do Clã', atualizado_em=CURRENT_TIMESTAMP
+            WHERE nome='Benção do Clã'
+              AND NOT EXISTS (
+                  SELECT 1 FROM almas_legends WHERE nome='Bênção do Clã'
+              )
+        """)
 
-        almas_novas_market = [
-            ("Lança Xamânica", "Arqueiro", "Lanceiro", "Lança", None,
-             "Efeito a confirmar.", False),
-            ("Benção do Clã", "Mago", "Suporte", "Varinha", None,
-             "Efeito a confirmar.", False),
-            ("Chama de Guerra", "Mago", "Cajado", "Cajado", None,
-             "Efeito a confirmar.", False),
-            ("Fúria de Khar'Gath", "Guerreiro", "Berserker", "Machado", None,
-             "Efeito a confirmar.", False),
+        catalogo_almas = [
+            ("Fúria do Lobo", "Guerreiro", "Berserker", "Machado", 3,
+             "Golpe 1,6× e recebe +30% de ataque por 2 turnos.", True),
+            ("Golpe Sombrio", "Guerreiro", "Berserker", "Machado", 4,
+             "Golpe 1,7× e recupera vida igual a 20% do dano causado.", True),
+            ("Fúria do Titã", "Guerreiro", "Berserker", "Machado", 9,
+             "Golpe que causa 2,0× de dano.", True),
+            ("Fúria de Khar'Gath", "Guerreiro", "Berserker", "Machado", 7,
+             "Golpe 2,2×. Contra alvos com menos de 30% de HP, causa 30% de dano adicional.", True),
+            ("Rugido do Rochedo", "Guerreiro", "Tank", "Espada e Escudo", 4,
+             "Reduz 50% do dano recebido por 2 turnos e provoca o alvo.", True),
+            ("Escudo de Ossos", "Guerreiro", "Tank", "Espada e Escudo", 5,
+             "Recupera 50% do HP máximo. No PvP, recupera 25%.", True),
+            ("Golpe do Obelisco", "Guerreiro", "Tank", "Espada e Escudo", 6,
+             "Golpe 1,4× com dano adicional igual a 50% da defesa total.", True),
+            ("Muralha Orc", "Guerreiro", "Tank", "Espada e Escudo", 6,
+             "Provoca por 2 turnos, recebe 40% menos dano por 2 turnos e recupera 15% do HP máximo.", True),
+            ("Picada da Aranha", "Arqueiro", "Caçador", "Arco", 4,
+             "Golpe 1,3× e aplica veneno equivalente a 20% do ataque por turno durante 2 turnos.", True),
+            ("Precisão Élfica", "Arqueiro", "Caçador", "Arco", 6,
+             "Golpe 1,7× com +20% de chance de crítico neste disparo.", True),
+            ("Flecha do Djinn", "Arqueiro", "Caçador", "Arco", 6,
+             "Golpe 1,8× que ignora 30% da defesa do alvo.", True),
+            ("Presa do Rastreador", "Arqueiro", "Caçador", "Arco", 5,
+             "Golpe 1,4× e aplica veneno pesado equivalente a 30% do seu ataque por turno durante 3 turnos.", True),
+            ("Lança dos Ventos", "Arqueiro", "Lanceiro", "Lança", 3,
+             "Golpe 1,5× e recupera 20% do HP máximo.", True),
+            ("Lança do Guardião", "Arqueiro", "Lanceiro", "Lança", 4,
+             "Reduz 20% do dano recebido por 2 turnos e provoca o alvo.", True),
+            ("Lança Solar", "Arqueiro", "Lanceiro", "Lança", 6,
+             "Golpe 1,5× com dano adicional igual a 5% do seu HP máximo.", True),
+            ("Lança Xamânica", "Arqueiro", "Lanceiro", "Lança", 5,
+             "Golpe 1,4× e recupera 15% do HP máximo de toda a equipe.", True),
+            ("Maldição da Bruxa", "Mago", "Cajado", "Cajado", 4,
+             "Golpe 1,4× e aplica maldição equivalente a 65% do ataque por turno durante 2 turnos.", True),
+            ("Poder do Lich", "Mago", "Cajado", "Cajado", 5,
+             "Golpe 1,7× e recebe +25% de ataque por 3 turnos.", True),
+            ("Tempestade de Areia", "Mago", "Cajado", "Cajado", 6,
+             "O próximo golpe causa 2,0× de dano.", True),
+            ("Chama de Guerra", "Mago", "Cajado", "Cajado", 5,
+             "Golpe 1,5× que reduz em 30% a defesa do alvo por 2 turnos.", True),
+            ("Escudo Arcano", "Mago", "Suporte", "Varinha", 4,
+             "Toda a equipe recebe 50% menos dano por 3 turnos.", True),
+            ("Vontade do Lich", "Mago", "Suporte", "Varinha", 5,
+             "Toda a equipe recupera 35% do HP máximo. No PvP, recupera 20%.", True),
+            ("Orbe Solar", "Mago", "Suporte", "Varinha", 5,
+             "Golpe 1,4× e concede +15% de ataque para toda a equipe por 2 turnos.", True),
+            ("Bênção do Clã", "Mago", "Suporte", "Varinha", 6,
+             "Recupera 25% do HP máximo da equipe e concede +10% de ataque por 2 turnos.", True),
         ]
         cur.executemany("""
             INSERT INTO almas_legends (
                 nome, classe_base, especializacao, equipamento,
                 recarga_turnos, efeito, confirmado
             ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (nome) DO NOTHING
-        """, almas_novas_market)
+            ON CONFLICT (nome) DO UPDATE SET
+                classe_base=EXCLUDED.classe_base,
+                especializacao=EXCLUDED.especializacao,
+                equipamento=EXCLUDED.equipamento,
+                recarga_turnos=EXCLUDED.recarga_turnos,
+                efeito=EXCLUDED.efeito,
+                confirmado=EXCLUDED.confirmado,
+                fonte='Guia de habilidades do Teletofus',
+                atualizado_em=CURRENT_TIMESTAMP
+        """, catalogo_almas)
+        cur.execute("""
+            UPDATE almas_legends
+            SET fonte='Guia de habilidades do Teletofus'
+            WHERE nome = ANY(%s)
+        """, ([alma[0] for alma in catalogo_almas],))
+        concluir_carga_inicial("almas_v1")
         conn.commit()
         print("0 - Estrutura do banco verificada")
     finally:
@@ -3932,7 +3950,7 @@ async def mostrar_inicio_unificado(alvo, editar=False):
 
 ESPECIALIZACOES_ALMAS = {
     "berserker": ("Berserker", "Guerreiro", "almas_guerreiro", "🪓"),
-    "paladino": ("Paladino", "Guerreiro", "almas_guerreiro", "🛡️"),
+    "tank": ("Tank", "Guerreiro", "almas_guerreiro", "🛡️"),
     "cacador": ("Caçador", "Arqueiro", "almas_arqueiro", "🏹"),
     "lanceiro": ("Lanceiro", "Arqueiro", "almas_arqueiro", "🔱"),
     "cajado": ("Cajado", "Mago", "almas_mago", "🪄"),
@@ -4000,7 +4018,7 @@ async def mostrar_alma(query, alma_id):
     try:
         cur.execute("""
             SELECT nome, classe_base, especializacao, equipamento,
-                   recarga_turnos, efeito, confirmado, fonte
+                   recarga_turnos, efeito, confirmado, fonte, obtencao
             FROM almas_legends WHERE id=%s
         """, (alma_id,))
         alma = cur.fetchone()
@@ -4009,7 +4027,7 @@ async def mostrar_alma(query, alma_id):
     if not alma:
         await query.answer("Alma não encontrada.", show_alert=True)
         return
-    nome, classe, especializacao, equipamento, recarga, efeito, confirmado, fonte = alma
+    nome, classe, especializacao, equipamento, recarga, efeito, confirmado, fonte, obtencao = alma
     slug = next((
         chave for chave, dados in ESPECIALIZACOES_ALMAS.items()
         if dados[0].casefold() == especializacao.casefold()
@@ -4022,6 +4040,7 @@ async def mostrar_alma(query, alma_id):
         f"⚔️ Equipamento: {equipamento}\n"
         f"⏳ Recarga: {recarga or 'a confirmar'} turnos\n\n"
         f"📖 {efeito or 'Efeito a confirmar.'}\n\n"
+        f"📍 Obtenção: {obtencao or 'não informada'}\n\n"
         f"🔎 {estado}\n📚 Fonte: {fonte}"
     )
     teclado = InlineKeyboardMarkup([
