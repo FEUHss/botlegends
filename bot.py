@@ -931,13 +931,17 @@ def inicializar_banco():
             ])
             concluir_carga_inicial("monstros_v1")
 
-        # XP de masmorra pertence ao resumo da atividade, não a cada monstro.
-        # O Gold varia por execução e também não é um atributo do monstro.
+        # Nas masmorras comuns, XP pertence ao resumo da atividade.
+        # Fendas preservam XP/Gold dos monstros para somar a recompensa.
         cur.execute("""
-            UPDATE catalogo_monstros
+            UPDATE catalogo_monstros AS cm
             SET xp=NULL, gold=NULL, atualizado_em=CURRENT_TIMESTAMP
             WHERE LOWER(tipo)=LOWER('Masmorra')
               AND (xp IS NOT NULL OR gold IS NOT NULL)
+              AND NOT EXISTS (
+                  SELECT 1 FROM catalogo_masmorras d
+                  WHERE d.id=cm.masmorra_id AND d.tipo_sistema='fenda'
+              )
         """)
 
         # Vincula o catálogo legado às masmorras canônicas sem apagar imagens
