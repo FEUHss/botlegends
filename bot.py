@@ -3,6 +3,7 @@ import os
 import re
 import random
 import hashlib
+import statistics
 import psycopg2
 import pytz
 from datetime import datetime, timedelta
@@ -281,6 +282,42 @@ def inicializar_banco():
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS cripta_xp_observacoes (
+            id BIGSERIAL PRIMARY KEY,
+            cripta_numero INTEGER NOT NULL REFERENCES catalogo_criptas(numero)
+                ON DELETE CASCADE,
+            andares_concluidos INTEGER NOT NULL CHECK (andares_concluidos >= 0),
+            xp_acumulado BIGINT NOT NULL CHECK (xp_acumulado >= 0),
+            confirmado BOOLEAN NOT NULL DEFAULT TRUE,
+            fonte TEXT,
+            observado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            atualizado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (cripta_numero, andares_concluidos)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS site_acessos (
+            telegram_id BIGINT PRIMARY KEY,
+            papel TEXT NOT NULL DEFAULT 'consulta'
+                CHECK (papel IN ('consulta', 'editor', 'admin')),
+            permitido BOOLEAN NOT NULL DEFAULT TRUE,
+            ultimo_acesso TIMESTAMPTZ,
+            criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            atualizado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS site_login_codigos (
+            codigo TEXT PRIMARY KEY,
+            telegram_id BIGINT,
+            proximo_caminho TEXT,
+            criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expira_em TIMESTAMPTZ NOT NULL,
+            confirmado_em TIMESTAMPTZ,
+            consumido_em TIMESTAMPTZ
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS masmorra_aliases (
             id BIGSERIAL PRIMARY KEY,
             masmorra_id BIGINT NOT NULL REFERENCES catalogo_masmorras(id)
@@ -533,6 +570,17 @@ def inicializar_banco():
                 nivel_maximo=COALESCE(catalogo_criptas.nivel_maximo, EXCLUDED.nivel_maximo),
                 atualizado_em=CURRENT_TIMESTAMP
         """)
+        cur.executemany("""
+            INSERT INTO cripta_xp_observacoes
+                (cripta_numero, andares_concluidos, xp_acumulado,
+                 confirmado, fonte)
+            VALUES (2, %s, %s, TRUE, 'Sequência observada pela guilda')
+            ON CONFLICT (cripta_numero, andares_concluidos) DO NOTHING
+        """, [
+            (8, 14123), (9, 16743), (10, 19547),
+            (11, 22548), (12, 25758), (13, 29193),
+            (14, 32869), (15, 36802), (16, 41011),
+        ])
         # Migração idempotente: reaproveita os sete registros já vinculados à
         # antiga "Cripta II" sem mudar id, ordem, imagem ou relacionamentos.
         cur.execute("""
@@ -3125,6 +3173,16 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not texto:
         return
 
+    numero_cripta_xp = context.user_data.get("cripta_xp_aguardando")
+    if numero_cripta_xp and msg.chat.type == "private":
+        valor = texto.strip()
+        if not valor.isdigit() or not 1 <= int(valor) <= 999:
+            await msg.reply_text("Informe somente um andar entre 1 e 999.")
+            return
+        context.user_data.pop("cripta_xp_aguardando", None)
+        await mostrar_resultado_run_cripta(msg, numero_cripta_xp, int(valor))
+        return
+
     if await processar_busca_biblioteca(update, context):
         return
 
@@ -4267,6 +4325,182 @@ async def mostrar_inicio_criptas(alvo):
     )
 
 
+def formatar_xp(valor):
+    return f"{int(valor):,}".replace(",", ".") if valor is not None else "indisponível"
+
+
+def calcular_acumulado_cripta(numero, andares_concluidos):
+    """Retorna (xp, confirmado) sem transformar projeções em dados salvos."""
+    if andares_concluidos == 0:
+        return 0, True
+    if andares_concluidos < 0:
+        return None, False
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT andares_concluidos, xp_acumulado
+            FROM cripta_xp_observacoes
+            WHERE cripta_numero=%s AND confirmado=TRUE
+            ORDER BY andares_concluidos
+        """, (numero,))
+        observacoes = dict(cur.fetchall())
+    finally:
+        cur.close()
+    if andares_concluidos in observacoes:
+        return observacoes[andares_concluidos], True
+    if not observacoes:
+        return None, False
+    ultimo_andar = max(observacoes)
+    if andares_concluidos < ultimo_andar:
+        return None, False
+
+    deltas = {}
+    for andar in sorted(observacoes):
+        if andar - 1 in observacoes:
+            deltas[andar] = observacoes[andar] - observacoes[andar - 1]
+    if not deltas:
+        return None, False
+    ultimo_delta_andar = max(deltas)
+    delta = deltas[ultimo_delta_andar]
+    taxas = [
+        deltas[andar] / deltas[andar - 1]
+        for andar in sorted(deltas)
+        if andar - 1 in deltas and deltas[andar - 1] > 0
+    ]
+    taxa = statistics.median(taxas) if taxas else 1.07
+    acumulado = observacoes[ultimo_andar]
+    for _andar in range(ultimo_andar + 1, andares_concluidos + 1):
+        delta = int(delta * taxa + 0.5)
+        acumulado += delta
+    return acumulado, False
+
+
+def resultado_run_cripta(numero, andar_alvo):
+    antes, antes_confirmado = calcular_acumulado_cripta(numero, andar_alvo - 1)
+    depois, depois_confirmado = calcular_acumulado_cripta(numero, andar_alvo)
+    ganho = depois - antes if antes is not None and depois is not None else None
+    return {
+        "antes": antes, "depois": depois, "ganho": ganho,
+        "antes_confirmado": antes_confirmado,
+        "depois_confirmado": depois_confirmado,
+    }
+
+
+async def mostrar_cripta(alvo, numero):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT c.nome, c.nivel_minimo, c.nivel_maximo, mp.nome,
+                   COUNT(cm.id)
+            FROM catalogo_criptas c
+            LEFT JOIN catalogo_mapas mp ON mp.id=c.mapa_id
+            LEFT JOIN catalogo_monstros cm ON cm.cripta_numero=c.numero
+                AND LOWER(cm.tipo)=LOWER('Cripta')
+            WHERE c.numero=%s
+            GROUP BY c.numero, c.nome, c.nivel_minimo, c.nivel_maximo, mp.nome
+        """, (numero,))
+        cripta = cur.fetchone()
+    finally:
+        cur.close()
+    if not cripta:
+        await mostrar_inicio_criptas(alvo)
+        return
+    nome, nivel_minimo, nivel_maximo, mapa, total = cripta
+    nivel = (
+        f"{nivel_minimo}–{nivel_maximo}"
+        if nivel_minimo is not None and nivel_maximo is not None
+        else "a confirmar"
+    )
+    texto = (
+        f"🗝️ {nome.upper()}\n\n📍 Local: {mapa or 'Cemitério Antigo'}\n"
+        f"🎚️ Níveis permitidos: {nivel}\n👹 Monstros cadastrados: {total}\n\n"
+        "Escolha o que deseja consultar:"
+    )
+    teclado = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👹 Monstros", callback_data=f"cripta_monstros_{numero}")],
+        [InlineKeyboardButton("⭐ Consultar XP", callback_data=f"cripta_xp_{numero}")],
+        [InlineKeyboardButton("⬅ Criptas", callback_data="lib_criptas")],
+    ])
+    await editar_pagina_biblioteca(alvo, "atlas", texto, teclado)
+
+
+async def mostrar_consulta_xp_cripta(alvo, numero):
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT nome FROM catalogo_criptas WHERE numero=%s", (numero,))
+        row = cur.fetchone()
+    finally:
+        cur.close()
+    if not row:
+        await mostrar_inicio_criptas(alvo)
+        return
+    teclado = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("1–10", callback_data=f"cripta_run_{numero}_10"),
+            InlineKeyboardButton("1–20", callback_data=f"cripta_run_{numero}_20"),
+        ],
+        [
+            InlineKeyboardButton("1–30", callback_data=f"cripta_run_{numero}_30"),
+            InlineKeyboardButton("1–40", callback_data=f"cripta_run_{numero}_40"),
+        ],
+        [InlineKeyboardButton("🔢 Informar andar de saída", callback_data=f"cripta_custom_{numero}")],
+        [InlineKeyboardButton("⬅ Voltar à Cripta", callback_data=f"cripta_{numero}")],
+    ])
+    await editar_pagina_biblioteca(
+        alvo, "atlas",
+        f"⭐ CALCULADORA — {row[0].upper()}\n\n"
+        "Escolha uma run popular ou informe o andar em que pretende decidir se sai.\n\n"
+        "O resultado mostra o XP ao sair durante esse andar e após concluí-lo.",
+        teclado,
+    )
+
+
+async def mostrar_resultado_run_cripta(alvo, numero, andar_alvo):
+    if andar_alvo < 1 or andar_alvo > 999:
+        if hasattr(alvo, "answer"):
+            await alvo.answer("Informe um andar entre 1 e 999.", show_alert=True)
+        else:
+            await alvo.reply_text("Informe um andar entre 1 e 999.")
+        return
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT nome FROM catalogo_criptas WHERE numero=%s", (numero,))
+        row = cur.fetchone()
+    finally:
+        cur.close()
+    if not row:
+        await mostrar_inicio_criptas(alvo)
+        return
+    resultado = resultado_run_cripta(numero, andar_alvo)
+    antes = resultado["antes"]
+    depois = resultado["depois"]
+    marca_antes = "✅ confirmado" if resultado["antes_confirmado"] else "🧮 estimado"
+    marca_depois = "✅ confirmado" if resultado["depois_confirmado"] else "🧮 estimado"
+    texto = (
+        f"⭐ {row[0].upper()} — RUN 1–{andar_alvo}\n\n"
+        f"🚪 Sair durante o andar {andar_alvo}:\n"
+        f"📊 XP dos andares 1–{andar_alvo - 1}: {formatar_xp(antes)} "
+        f"{marca_antes if antes is not None else ''}\n\n"
+        f"⚔️ Concluir o andar {andar_alvo} e sair:\n"
+        f"📊 XP dos andares 1–{andar_alvo}: {formatar_xp(depois)} "
+        f"{marca_depois if depois is not None else ''}\n"
+    )
+    if resultado["ganho"] is not None:
+        texto += f"\n➕ XP do andar {andar_alvo}: {formatar_xp(resultado['ganho'])}"
+    if antes is None or depois is None:
+        texto += "\n\n⚠️ Ainda faltam observações reais para calcular esta faixa."
+    elif not (resultado["antes_confirmado"] and resultado["depois_confirmado"]):
+        texto += "\n\n🧮 A estimativa usa a progressão observada e não substitui dados reais."
+    teclado = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⭐ Outras runs", callback_data=f"cripta_xp_{numero}")],
+        [InlineKeyboardButton("🗝️ Voltar à Cripta", callback_data=f"cripta_{numero}")],
+    ])
+    if hasattr(alvo, "message"):
+        await editar_pagina_biblioteca(alvo, "atlas", texto, teclado)
+    else:
+        await enviar_pagina_biblioteca(alvo, "atlas", texto, teclado)
+
+
 async def mostrar_monstros_cripta(alvo, numero):
     cur = conn.cursor()
     try:
@@ -4292,7 +4526,7 @@ async def mostrar_monstros_cripta(alvo, numero):
     botoes = [[InlineKeyboardButton(
         f"👹 {nome_monstro}", callback_data=f"cripta_m_{monstro_id}"
     )] for monstro_id, nome_monstro in monstros]
-    botoes.append([InlineKeyboardButton("⬅ Criptas", callback_data="lib_criptas")])
+    botoes.append([InlineKeyboardButton("⬅ Voltar à Cripta", callback_data=f"cripta_{numero}")])
     instrucao = "Escolha um monstro:" if monstros else "Nenhum monstro cadastrado por enquanto."
     await editar_pagina_biblioteca(
         alvo, "atlas", f"🗝️ {nome.upper()}\n{nivel}\n\n{instrucao}",
@@ -4336,13 +4570,12 @@ async def mostrar_monstro_cripta(alvo, monstro_id):
         f"⚠️ Risco: {risco_texto}{alerta}"
     )
     teclado = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ Monstros da Cripta", callback_data=f"cripta_{numero}")],
+        [InlineKeyboardButton("⬅ Monstros da Cripta", callback_data=f"cripta_monstros_{numero}")],
         [InlineKeyboardButton("🗝️ Todas as Criptas", callback_data="lib_criptas")],
     ])
     await editar_pagina_biblioteca(
         alvo, "atlas", texto, teclado, file_id=file_id, file_unique_id=unique_id
     )
-    await editar_pagina_biblioteca(query, midia, texto, teclado)
 
 
 async def cmd_mapa(update, context):
@@ -5113,6 +5346,64 @@ async def cmd_start(update, context):
     )
 
 
+async def cmd_site(update, context):
+    if update.effective_chat.type != "private":
+        await update.message.reply_text(
+            "Por segurança, confirme o acesso ao site somente no privado."
+        )
+        return
+    if len(context.args) != 1 or not re.fullmatch(r"[A-Z0-9]{8}", context.args[0].upper()):
+        await update.message.reply_text(
+            "Use /site seguido do código de 8 caracteres mostrado no painel."
+        )
+        return
+    telegram_id = update.effective_user.id
+    if not membro_cadastrado(telegram_id):
+        await update.message.reply_text(
+            "⚠️ O acesso ao site é permitido somente para membros ativos cadastrados."
+        )
+        return
+    codigo = context.args[0].upper()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT permitido, papel FROM site_acessos WHERE telegram_id=%s
+        """, (telegram_id,))
+        acesso = cur.fetchone()
+        if acesso and not acesso[0]:
+            await update.message.reply_text(
+                "⚠️ Seu acesso ao site está desativado. Fale com a liderança."
+            )
+            return
+        if not acesso:
+            cur.execute("""
+                INSERT INTO site_acessos (telegram_id, papel, permitido)
+                VALUES (%s, 'consulta', TRUE)
+                ON CONFLICT (telegram_id) DO NOTHING
+            """, (telegram_id,))
+        cur.execute("""
+            UPDATE site_login_codigos
+            SET telegram_id=%s, confirmado_em=CURRENT_TIMESTAMP
+            WHERE codigo=%s AND expira_em>CURRENT_TIMESTAMP
+              AND confirmado_em IS NULL AND consumido_em IS NULL
+        """, (telegram_id, codigo))
+        if cur.rowcount != 1:
+            conn.rollback()
+            await update.message.reply_text(
+                "⚠️ Código inválido ou expirado. Gere um novo código no site."
+            )
+            return
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+    await update.message.reply_text(
+        "✅ Identidade confirmada! Volte ao site e clique em ‘Já confirmei’."
+    )
+
+
 async def cmd_biblioteca(update, context):
 
     if not await validar_acesso(update, context, "/biblioteca"):
@@ -5658,6 +5949,48 @@ async def callback_biblioteca(update, context):
         await mostrar_inicio_criptas(query)
         return
 
+    if dados.startswith("cripta_monstros_"):
+        try:
+            numero = int(dados.removeprefix("cripta_monstros_"))
+        except ValueError:
+            return
+        await mostrar_monstros_cripta(query, numero)
+        return
+
+    if dados.startswith("cripta_xp_"):
+        try:
+            numero = int(dados.removeprefix("cripta_xp_"))
+        except ValueError:
+            return
+        await mostrar_consulta_xp_cripta(query, numero)
+        return
+
+    if dados.startswith("cripta_run_"):
+        try:
+            _prefixo, _run, numero, andar = dados.split("_")
+            numero, andar = int(numero), int(andar)
+        except (ValueError, TypeError):
+            return
+        await mostrar_resultado_run_cripta(query, numero, andar)
+        return
+
+    if dados.startswith("cripta_custom_"):
+        try:
+            numero = int(dados.removeprefix("cripta_custom_"))
+        except ValueError:
+            return
+        context.user_data["cripta_xp_aguardando"] = numero
+        await editar_pagina_biblioteca(
+            query, "atlas",
+            "🔢 INFORMAR ANDAR DE SAÍDA\n\n"
+            "Envie somente o número do andar em que pretende decidir se sai.\n\n"
+            "Exemplo: 35",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅ Cancelar", callback_data=f"cripta_xp_{numero}")
+            ]]),
+        )
+        return
+
     if dados.startswith("cripta_m_"):
         try:
             monstro_id = int(dados.removeprefix("cripta_m_"))
@@ -5671,7 +6004,7 @@ async def callback_biblioteca(update, context):
             numero = int(dados.removeprefix("cripta_"))
         except ValueError:
             return
-        await mostrar_monstros_cripta(query, numero)
+        await mostrar_cripta(query, numero)
         return
 
     if dados == "lib_almas":
@@ -6237,6 +6570,10 @@ def main():
     )
 
     app.add_handler(
+        CommandHandler("site", cmd_site)
+    )
+
+    app.add_handler(
         CommandHandler(
             "item",
             cmd_item
@@ -6338,4 +6675,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
