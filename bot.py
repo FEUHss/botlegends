@@ -4946,7 +4946,7 @@ async def mostrar_monstros_atlas(alvo, mapa_id, codigo_area):
 
         botoes = [
             InlineKeyboardButton(
-                f"{ordem}. {nome}",
+                nome,
                 callback_data=f"atlas_x_{monstro_id}_{mapa_id}_{codigo_area}"
             )
             for ordem, monstro_id, nome in monstros
@@ -5040,7 +5040,7 @@ async def mostrar_monstro_atlas(
 
         eh_masmorra = (tipo or "").lower() in {"masmorra", "cripta"}
         texto = (
-            f"👹 MONSTRO {ordem} — {nome}\n\n"
+            f"👹 {nome}\n\n"
             f"🗺️ {mapa}   🏷️ {'Fenda' if sistema == 'fenda' else (tipo or 'a confirmar')}   "
             f"💠 {raridade or 'a confirmar'}\n"
             f"❤️ HP: {hp_principal}   "
@@ -5201,10 +5201,10 @@ async def cmd_monstro(update, context):
         if not numero:
             linhas = ["👹 BESTIÁRIO DO TELETOFUS", ""]
 
-            for indice, monstro in enumerate(monstros, start=1):
-                linhas.append(f"{indice}. {monstro[1]} — {monstro[2] or 'mapa a confirmar'}")
+            for monstro in monstros:
+                linhas.append(f"• {monstro[1]} — {monstro[2] or 'mapa a confirmar'}")
 
-            linhas.extend(["", "Consulte os detalhes com /monstro número."])
+            linhas.extend(["", "Consulte os detalhes pelos botões em /lib → Atlas ou Criptas."])
             await enviar_em_partes(update, "\n".join(linhas))
             return
 
@@ -5228,7 +5228,7 @@ async def cmd_monstro(update, context):
 
         eh_masmorra = (tipo or "").lower() in {"masmorra", "cripta"}
         linhas = [
-            f"👹 MONSTRO {numero} — {nome}",
+            f"👹 {nome}",
             "",
             f"🗺️ Mapa: {mapa or 'a confirmar'}   🏷️ Tipo: {tipo or 'a confirmar'}   💠 Raridade: {raridade or 'a confirmar'}",
             f"❤️ HP: {formatar_valor_catalogo(hp)}   ⚔️ ATK: {formatar_valor_catalogo(atk)}   🛡️ DEF: {formatar_valor_catalogo(defesa)}",
