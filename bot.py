@@ -5748,15 +5748,13 @@ async def mostrar_item(
 
     }
 
-    texto += (
-        f"{classe_map.get(item['classe'],'')}\n"
-    )
+    cabecalho = [classe_map.get(item['classe'], '')]
 
     if item.get("nivel"):
 
-        texto += (
-            f"⭐ Lv {item['nivel']}\n"
-        )
+        cabecalho.append(f"⭐ Lv {item['nivel']}")
+
+    texto += " · ".join(parte for parte in cabecalho if parte) + "\n"
 
     if item.get("duas_maos"):
 
@@ -5764,39 +5762,27 @@ async def mostrar_item(
             "⚔ Arma de Duas Mãos\n"
         )
 
-    stats = ""
+    stats = []
 
     if item.get("atk_min"):
 
-        stats += (
-            f"⚔ {item['atk_min']}~"
-            f"{item['atk_max']}\n"
-        )
+        stats.append(f"⚔ {item['atk_min']}~{item['atk_max']}")
 
     if item.get("def_min"):
 
-        stats += (
-            f"🛡 {item['def_min']}~"
-            f"{item['def_max']}\n"
-        )
+        stats.append(f"🛡 {item['def_min']}~{item['def_max']}")
 
     if item.get("hp_min"):
 
-        stats += (
-            f"❤️ {item['hp_min']}~"
-            f"{item['hp_max']}\n"
-        )
+        stats.append(f"❤️ {item['hp_min']}~{item['hp_max']}")
 
     if item.get("crit_min"):
 
-        stats += (
-            f"🎯 {float(item['crit_min']):g}~"
-            f"{float(item['crit_max']):g}%\n"
-        )
+        stats.append(f"🎯 {float(item['crit_min']):g}~{float(item['crit_max']):g}%")
 
     if stats:
 
-        texto += "\n" + stats
+        texto += "\n" + " · ".join(stats) + "\n"
 
     if item.get("descricao"):
 
@@ -5846,6 +5832,28 @@ async def mostrar_item(
             f"\n🎁 Chance: "
             f"{item['chance_drop']}"
         )
+
+    cur.execute("SELECT to_regclass('public.market_price_observations')")
+    if cur.fetchone()[0]:
+        cur.execute("""
+            SELECT upgrade, COUNT(*) AS anuncios,
+                   ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP
+                         (ORDER BY unit_price)::numeric, 2) AS mediana
+            FROM market_price_observations
+            WHERE catalog_type='item' AND item_id=%s
+              AND offer_side='sell' AND price_currency='TOFU'
+              AND message_date >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+            GROUP BY upgrade
+            ORDER BY upgrade NULLS FIRST
+        """, (item_id,))
+        tendencias = cur.fetchall()
+        if tendencias:
+            texto += "\n\n📈 Tendência de mercado — 7 dias\n"
+            for aprimoramento, anuncios, mediana in tendencias:
+                rotulo = "Base" if aprimoramento is None else f"+{aprimoramento}"
+                preco = f"{float(mediana):g}"
+                texto += f"• {rotulo}: {anuncios} anúncio(s) · mediana {preco} 🧀\n"
+            texto += "⚠️ Referência de anúncios; não é preço oficial."
 
 
     cur.execute("""

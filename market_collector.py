@@ -272,6 +272,49 @@ WHERE dedupe_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_market_raw_text_expiry
 ON market_messages (raw_text_expires_at)
 WHERE raw_text IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS market_catalog_aliases (
+    id BIGSERIAL PRIMARY KEY,
+    alias TEXT NOT NULL,
+    alias_normalized TEXT NOT NULL UNIQUE,
+    catalog_type TEXT NOT NULL CHECK (catalog_type IN ('item','soul')),
+    item_id BIGINT REFERENCES itens_legends(id) ON DELETE CASCADE,
+    soul_id BIGINT REFERENCES almas_legends(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (
+        (catalog_type='item' AND item_id IS NOT NULL AND soul_id IS NULL) OR
+        (catalog_type='soul' AND soul_id IS NOT NULL AND item_id IS NULL)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS market_unmatched_candidates (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    candidate_index INTEGER NOT NULL,
+    detected_name TEXT NOT NULL,
+    detected_normalized TEXT NOT NULL,
+    offer_side TEXT NOT NULL,
+    upgrade INTEGER,
+    quantity NUMERIC NOT NULL DEFAULT 1,
+    price_amount NUMERIC NOT NULL,
+    price_currency TEXT NOT NULL,
+    unit_price NUMERIC NOT NULL,
+    confidence NUMERIC NOT NULL,
+    message_date TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved','ignored')),
+    resolved_catalog_type TEXT,
+    resolved_item_id BIGINT REFERENCES itens_legends(id) ON DELETE SET NULL,
+    resolved_soul_id BIGINT REFERENCES almas_legends(id) ON DELETE SET NULL,
+    resolved_at TIMESTAMPTZ,
+    UNIQUE (chat_id, message_id, candidate_index),
+    FOREIGN KEY (chat_id, message_id)
+        REFERENCES market_messages(chat_id, message_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_unmatched_status
+ON market_unmatched_candidates (status, message_date DESC);
 """
 
 
@@ -294,7 +337,20 @@ def _catalog_candidates(cursor) -> list[tuple[str, int, str, str]]:
         ("soul", row_id, name, normalize_name(name))
         for row_id, name in cursor.fetchall()
     )
-    return candidates
+    cursor.execute(
+        """SELECT a.catalog_type, a.item_id, a.soul_id, a.alias_normalized,
+                  COALESCE(i.nome, s.nome) AS canonical_name
+           FROM market_catalog_aliases a
+           LEFT JOIN itens_legends i ON i.id=a.item_id
+           LEFT JOIN almas_legends s ON s.id=a.soul_id
+           WHERE COALESCE(i.nome, s.nome) IS NOT NULL"""
+    )
+    candidates.extend(
+        (catalog_type, item_id or soul_id, canonical_name, alias_normalized)
+        for catalog_type, item_id, soul_id, alias_normalized, canonical_name
+        in cursor.fetchall()
+    )
+    return list(dict.fromkeys(candidates))
 
 
 def resolve_catalog_name(
@@ -533,13 +589,13 @@ def _persist_message(
         with connection.cursor() as cursor:
             candidates = _catalog_candidates(cursor)
             matched = []
-            unmatched_generic = 0
+            unmatched_observations = []
             for observation in observations:
                 catalog = resolve_catalog_name(observation.item_name, candidates)
                 if catalog:
                     matched.append((observation, catalog))
                 else:
-                    unmatched_generic += 1
+                    unmatched_observations.append(observation)
 
             matched.extend(parse_catalog_market_message(text, candidates))
             unique_matched = []
@@ -555,7 +611,7 @@ def _persist_message(
                     unique_matched.append((observation, catalog))
             matched = unique_matched
 
-            unmatched_count = unmatched_generic
+            unmatched_count = len(unmatched_observations)
             detected_count = max(len(observations), len(matched) + unmatched_count)
             if not detected_count:
                 parse_status = "no_price"
@@ -607,6 +663,37 @@ def _persist_message(
                 "DELETE FROM market_price_observations WHERE chat_id = %s AND message_id = %s",
                 (chat_id, message_id),
             )
+            cursor.execute(
+                """DELETE FROM market_unmatched_candidates
+                   WHERE chat_id=%s AND message_id=%s AND status='pending'""",
+                (chat_id, message_id),
+            )
+            for index, observation in enumerate(unmatched_observations):
+                cursor.execute(
+                    """INSERT INTO market_unmatched_candidates (
+                        chat_id,message_id,candidate_index,detected_name,
+                        detected_normalized,offer_side,upgrade,quantity,
+                        price_amount,price_currency,unit_price,confidence,message_date
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (chat_id,message_id,candidate_index) DO UPDATE SET
+                        detected_name=EXCLUDED.detected_name,
+                        detected_normalized=EXCLUDED.detected_normalized,
+                        offer_side=EXCLUDED.offer_side,
+                        upgrade=EXCLUDED.upgrade,
+                        quantity=EXCLUDED.quantity,
+                        price_amount=EXCLUDED.price_amount,
+                        price_currency=EXCLUDED.price_currency,
+                        unit_price=EXCLUDED.unit_price,
+                        confidence=EXCLUDED.confidence,
+                        message_date=EXCLUDED.message_date""",
+                    (
+                        chat_id,message_id,index,observation.item_name,
+                        observation.item_normalized,observation.side,
+                        observation.upgrade,observation.quantity,
+                        observation.price_amount,observation.price_currency,
+                        observation.unit_price,observation.confidence,message_date,
+                    ),
+                )
             accepted = []
             deduped_count = 0
             for observation, catalog in matched:
