@@ -20,6 +20,7 @@ from loot_parser import (
     normalizar,
 )
 from market_collector import start_market_collector, stop_market_collector
+from photo_permissions import can_submit_photo
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -316,6 +317,10 @@ def inicializar_banco():
             confirmado_em TIMESTAMPTZ,
             consumido_em TIMESTAMPTZ
         )
+        """,
+        """
+        ALTER TABLE site_acessos
+        ADD COLUMN IF NOT EXISTS pode_enviar_fotos BOOLEAN NOT NULL DEFAULT FALSE
         """,
         """
         CREATE TABLE IF NOT EXISTS masmorra_aliases (
@@ -2334,9 +2339,9 @@ async def processar_imagem_mapa_ou_masmorra(msg):
     if (
         msg.chat.type != "private"
         or not msg.from_user
-        or msg.from_user.id != LOOT_REVIEWER_ID
         or not mensagem_encaminhada_pelo_teletofus(msg)
         or not msg.photo
+        or not can_submit_photo(conn, msg.from_user.id, LOOT_REVIEWER_ID)
     ):
         return False
 
@@ -2601,9 +2606,9 @@ async def processar_imagem_monstro(msg):
     if (
         msg.chat.type != "private"
         or not msg.from_user
-        or msg.from_user.id != LOOT_REVIEWER_ID
         or not mensagem_encaminhada_pelo_teletofus(msg)
         or not msg.photo
+        or not can_submit_photo(conn, msg.from_user.id, LOOT_REVIEWER_ID)
     ):
         return False
 
