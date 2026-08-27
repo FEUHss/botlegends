@@ -4824,13 +4824,33 @@ async def mostrar_resumo_masmorra_atlas(alvo, mapa_id, masmorra_id):
                     f"{formatar_valor_catalogo(valor)} XP"
                 )
 
-        tipo = {"cripta": "Cripta — sistema especial", "fenda": "Fenda — HP fixo"}.get(tipo_sistema, "Masmorra")
+        titulo_xp = "XP POR TAMANHO DA EQUIPE"
+        if tipo_sistema == "fenda":
+            titulo_xp = "XP por completar a Fenda"
+            # A recompensa da fenda vem dos monstros vinculados a ela.
+            # NULL é desconhecido, enquanto zero é um XP informado válido.
+            cur.execute("""
+                SELECT COUNT(*), COUNT(xp), SUM(xp)
+                FROM catalogo_monstros
+                WHERE masmorra_id=%s AND mapa_id=%s
+                  AND LOWER(tipo)=LOWER('Masmorra')
+            """, (masmorra_id, mapa_id))
+            cadastrados, com_xp, soma_xp = cur.fetchone()
+            linhas_xp = []
+            if com_xp:
+                linhas_xp.append(f"• {formatar_valor_catalogo(soma_xp)} XP")
+                if com_xp < cadastrados:
+                    linhas_xp.append(
+                        f"⚠️ Soma parcial: {cadastrados - com_xp} monstro(s) sem XP informado."
+                    )
+
+        tipo = {"cripta": "Cripta — sistema especial", "fenda": "Fendas"}.get(tipo_sistema, "Masmorra")
         texto = (
             f"🗝️ {nome.upper()}\n\n"
             f"🗺️ Mapa: {mapa}\n"
             f"🏛️ Tipo: {tipo}\n"
             f"👥 Grupo permitido: {texto_capacidade_masmorra(minimo, maximo)}\n\n"
-            f"⭐ XP POR TAMANHO DA EQUIPE\n"
+            f"⭐ {titulo_xp}\n"
             f"{chr(10).join(linhas_xp) if linhas_xp else '• Valores ainda não informados'}"
         )
         if requisitos:
