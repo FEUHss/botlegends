@@ -21,6 +21,7 @@ from loot_parser import (
 )
 from market_collector import start_market_collector, stop_market_collector
 from photo_permissions import can_submit_photo
+from catalog_photos import save_header_photo, rift_entrance_name
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -2347,6 +2348,9 @@ async def processar_imagem_mapa_ou_masmorra(msg):
 
     texto = msg.caption or msg.text or ""
     dados_masmorra = extrair_masmorra_visual(texto)
+    nome_fenda = rift_entrance_name(texto)
+    if nome_fenda:
+        dados_masmorra = {"nome": nome_fenda, "mapa": "Abismo"}
     dados_mapa = extrair_mapa_visual(texto) if not dados_masmorra else None
     if not dados_masmorra and not dados_mapa:
         return False
@@ -2444,6 +2448,9 @@ async def processar_imagem_monstro_masmorra(msg, dados):
             return True
 
         masmorra_id, mapa_id, nome_mapa, nome_masmorra = masmorra
+        cur.execute("SELECT tipo_sistema FROM catalogo_masmorras WHERE id=%s", (masmorra_id,))
+        if cur.fetchone()[0] == "fenda" and "Sala:" in (msg.caption or msg.text or ""):
+            return await save_header_photo(conn, msg, msg.caption or msg.text or "")
         monstro = resolver_monstro_masmorra_catalogo(
             cur, dados["nome"], mapa_id, masmorra_id
         )
@@ -2679,103 +2686,13 @@ async def processar_imagem_monstro(msg):
     if dados_masmorra:
         return await processar_imagem_monstro_masmorra(msg, dados_masmorra)
 
-    dados = extrair_monstro_combate(texto)
-    if not dados:
-        return False
-
-    cur = conn.cursor()
     try:
-        monstro = resolver_monstro_catalogo(cur, dados["nome"])
-        if not monstro:
-            semelhantes = candidatos_monstro_semelhante(cur, dados["nome"])
-            if len(semelhantes) != 1:
-                nomes = ", ".join(row[1] for row in semelhantes[:6]) or "nenhum"
-                await msg.reply_text(
-                    "⚠️ Não encontrei um único monstro compatível.\n\n"
-                    f"Nome recebido: {dados['nome']}\n"
-                    f"Possíveis candidatos: {nomes}\n\n"
-                    "A imagem não foi salva."
-                )
-                return True
-            monstro = semelhantes[0]
-
-        monstro_id, nome_antigo, mapa_id = monstro
-        nome_novo = dados["nome"].strip()
-        if normalizar(nome_antigo) != normalizar(nome_novo):
-            cur.execute("""
-                SELECT 1 FROM catalogo_monstros
-                WHERE LOWER(nome)=LOWER(%s) AND id<>%s
-                LIMIT 1
-            """, (nome_novo, monstro_id))
-            if cur.fetchone():
-                await msg.reply_text(
-                    "⚠️ Já existe outro monstro com esse nome. "
-                    "A imagem não foi salva para evitar uma associação incorreta."
-                )
-                conn.rollback()
-                return True
-
-            cur.execute("""
-                INSERT INTO monstro_aliases
-                    (alias_normalizado, alias, monstro_id)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (alias_normalizado) DO UPDATE SET
-                    alias=EXCLUDED.alias,
-                    monstro_id=EXCLUDED.monstro_id
-            """, (normalizar(nome_antigo), nome_antigo, monstro_id))
-            cur.execute("""
-                UPDATE catalogo_monstros
-                SET nome=%s,
-                    hp=COALESCE(%s, hp),
-                    confirmado=TRUE,
-                    atualizado_em=CURRENT_TIMESTAMP
-                WHERE id=%s
-            """, (nome_novo, dados["hp"], monstro_id))
-        elif dados["hp"] is not None:
-            cur.execute("""
-                UPDATE catalogo_monstros
-                SET hp=%s, confirmado=TRUE, atualizado_em=CURRENT_TIMESTAMP
-                WHERE id=%s
-            """, (dados["hp"], monstro_id))
-
-        foto = msg.photo[-1]
-        cur.execute("""
-            INSERT INTO monstro_imagens
-                (monstro_id, telegram_file_id, telegram_file_unique_id,
-                 nome_detectado, hp_detectado)
-            VALUES (%s, %s, %s, %s, %s)
-
-            ON CONFLICT (telegram_file_unique_id) DO UPDATE SET
-                monstro_id=EXCLUDED.monstro_id,
-                telegram_file_id=EXCLUDED.telegram_file_id,
-                nome_detectado=EXCLUDED.nome_detectado,
-                hp_detectado=EXCLUDED.hp_detectado,
-                atualizado_em=CURRENT_TIMESTAMP
-        """, (
-            monstro_id, foto.file_id, foto.file_unique_id,
-            nome_novo, dados["hp"],
-        ))
-        cur.execute("SELECT nome FROM catalogo_mapas WHERE id=%s", (mapa_id,))
-        row_mapa = cur.fetchone()
-        conn.commit()
-
-        alteracao = ""
-        if normalizar(nome_antigo) != normalizar(nome_novo):
-            alteracao = f"\n✏️ Nome alterado: {nome_antigo} → {nome_novo}"
-        await msg.reply_text(
-            f"✅ Imagem salva para {nome_novo}."
-            f"{alteracao}\n"
-            f"🗺️ Mapa: {row_mapa[0] if row_mapa else 'não identificado'}\n"
-            f"❤️ HP: {dados['hp'] if dados['hp'] is not None else 'não informado'}"
-        )
-        return True
+        return await save_header_photo(conn, msg, texto)
     except Exception as erro:
         conn.rollback()
-        print(f"Erro ao cadastrar imagem de monstro: {erro}")
-        await msg.reply_text("⚠️ Não consegui salvar a imagem deste monstro.")
+        print(f"Erro ao salvar foto do catálogo: {erro!r}", flush=True)
+        await msg.reply_text("⚠️ Não consegui salvar esta imagem do catálogo.")
         return True
-    finally:
-        cur.close()
 
 
 async def processar_loot_para_revisao(msg, context):
@@ -4745,7 +4662,7 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
     try:
         imagem_mapa = None
         cur.execute("""
-            SELECT nome, nivel_minimo
+            SELECT nome, nivel_minimo, descricao
             FROM catalogo_mapas
             WHERE id=%s
         """, (mapa_id,))
@@ -4756,7 +4673,7 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
                 InlineKeyboardButton("⬅️ Mapas", callback_data="atlas_inicio")
             ]])
         else:
-            nome, nivel = mapa
+            nome, nivel, descricao = mapa
             cur.execute("""
                 SELECT telegram_file_id, telegram_file_unique_id
                 FROM mapa_imagens
@@ -4775,14 +4692,14 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
             total_cacada, total_masmorra = cur.fetchone()
 
             cur.execute("""
-                SELECT d.id, d.nome, COUNT(cm.id)
+                SELECT d.id, d.nome, COUNT(cm.id), d.tipo_sistema
                 FROM catalogo_masmorras d
                 LEFT JOIN catalogo_monstros cm
                   ON cm.masmorra_id=d.id
                  AND LOWER(cm.tipo)=LOWER('Masmorra')
                 WHERE d.mapa_id=%s
                   AND COALESCE(d.tipo_sistema, 'masmorra') <> 'cripta'
-                GROUP BY d.id, d.nome, d.ordem
+                GROUP BY d.id, d.nome, d.ordem, d.tipo_sistema
                 ORDER BY d.ordem, d.id
             """, (mapa_id,))
             masmorras = cur.fetchall()
@@ -4810,13 +4727,15 @@ async def mostrar_mapa_atlas(alvo, mapa_id, editar=False):
                 "Escolha uma área:"
             )
             linhas = []
+            if descricao:
+                texto = texto.replace("Escolha uma área:", f"{descricao}\n\nEscolha uma área:")
             linhas.append([InlineKeyboardButton(
                 f"⚔️ Caçada ({total_cacada})",
                 callback_data=f"atlas_t_{mapa_id}_c"
             )])
-            for masmorra_id, nome_masmorra, quantidade in masmorras:
+            for masmorra_id, nome_masmorra, quantidade, sistema in masmorras:
                 linhas.append([InlineKeyboardButton(
-                    f"🗝️ {nome_masmorra} ({quantidade})",
+                    f"{'🌀' if sistema == 'fenda' else '🗝️'} {nome_masmorra} ({quantidade})",
                     callback_data=f"atlas_d_{mapa_id}_{masmorra_id}"
                 )])
             linhas.append([
@@ -4905,7 +4824,7 @@ async def mostrar_resumo_masmorra_atlas(alvo, mapa_id, masmorra_id):
                     f"{formatar_valor_catalogo(valor)} XP"
                 )
 
-        tipo = "Cripta — sistema especial" if tipo_sistema == "cripta" else "Masmorra"
+        tipo = {"cripta": "Cripta — sistema especial", "fenda": "Fenda — HP fixo"}.get(tipo_sistema, "Masmorra")
         texto = (
             f"🗝️ {nome.upper()}\n\n"
             f"🗺️ Mapa: {mapa}\n"
@@ -5011,7 +4930,7 @@ async def mostrar_monstros_atlas(alvo, mapa_id, codigo_area):
         linhas = agrupar_botoes_atlas(botoes)
         if masmorra_id:
             linhas.append([InlineKeyboardButton(
-                "⬅️ Resumo da masmorra",
+                "⬅️ Resumo da área",
                 callback_data=f"atlas_d_{mapa_id}_{masmorra_id}",
             )])
         else:
@@ -5047,9 +4966,11 @@ async def mostrar_monstro_atlas(
     try:
         cur.execute("""
             SELECT cm.ordem, cm.nome, mp.nome, cm.tipo, cm.raridade,
-                   cm.hp, cm.atk, cm.defesa, cm.xp, cm.gold, cm.drops
+                   cm.hp, cm.atk, cm.defesa, cm.xp, cm.gold, cm.drops,
+                   d.tipo_sistema, cm.habilidade, cm.sem_habilidade
             FROM catalogo_monstros cm
             JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
+            LEFT JOIN catalogo_masmorras d ON d.id=cm.masmorra_id
             WHERE cm.id=%s AND cm.mapa_id=%s
         """, (monstro_id, mapa_id))
         monstro = cur.fetchone()
@@ -5058,7 +4979,7 @@ async def mostrar_monstro_atlas(
             return
 
         (ordem, nome, mapa, tipo, raridade, hp, atk, defesa, xp, gold,
-         drops) = monstro
+         drops, sistema, habilidade, sem_habilidade) = monstro
         cur.execute("""
             SELECT il.nome
             FROM item_drop_relacoes rel
@@ -5077,7 +4998,7 @@ async def mostrar_monstro_atlas(
         row_imagem = cur.fetchone()
 
         observacoes_hp = []
-        if (tipo or "").lower() == "masmorra":
+        if (tipo or "").lower() == "masmorra" and sistema != "fenda":
             cur.execute("""
                 SELECT andar, MIN(hp_max), MAX(hp_max), COUNT(*)
                 FROM masmorra_monstro_observacoes
@@ -5096,7 +5017,7 @@ async def mostrar_monstro_atlas(
         eh_masmorra = (tipo or "").lower() in {"masmorra", "cripta"}
         texto = (
             f"👹 MONSTRO {ordem} — {nome}\n\n"
-            f"🗺️ {mapa}   🏷️ {tipo or 'a confirmar'}   "
+            f"🗺️ {mapa}   🏷️ {'Fenda' if sistema == 'fenda' else (tipo or 'a confirmar')}   "
             f"💠 {raridade or 'a confirmar'}\n"
             f"❤️ HP: {hp_principal}   "
             f"⚔️ ATK: {formatar_valor_catalogo(atk)}   "
@@ -5107,7 +5028,7 @@ async def mostrar_monstro_atlas(
                 f"⭐ XP: {formatar_valor_catalogo(xp)}   "
                 f"💰 Gold: {formatar_valor_catalogo(gold)}\n"
             )
-        if eh_masmorra:
+        if eh_masmorra and sistema != "fenda":
             hp_por_andar = {
                 andar: (minimo, maximo)
                 for andar, minimo, maximo, _ in observacoes_hp
@@ -5124,6 +5045,8 @@ async def mostrar_monstro_atlas(
                     valor = f"{valores[0]}–{valores[1]}"
                 rotulo = "Boss" if andar == 4 else f"{andar}º andar"
                 texto += f"• {rotulo}: {valor}\n"
+        if sistema == "fenda" or habilidade or sem_habilidade:
+            texto += f"✨ Habilidade: {'Sem habilidade' if sem_habilidade else (habilidade or 'a confirmar')}\n"
         if drops_relacionados:
             texto += "🎁 Drops: " + ", ".join(drops_relacionados[:6])
             if len(drops_relacionados) > 6:
@@ -6688,5 +6611,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
