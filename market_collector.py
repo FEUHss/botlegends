@@ -278,8 +278,8 @@ CREATE TABLE IF NOT EXISTS market_catalog_aliases (
     alias TEXT NOT NULL,
     alias_normalized TEXT NOT NULL UNIQUE,
     catalog_type TEXT NOT NULL CHECK (catalog_type IN ('item','soul')),
-    item_id BIGINT REFERENCES itens_legends(id) ON DELETE CASCADE,
-    soul_id BIGINT REFERENCES almas_legends(id) ON DELETE CASCADE,
+    item_id BIGINT,
+    soul_id BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (
@@ -305,8 +305,8 @@ CREATE TABLE IF NOT EXISTS market_unmatched_candidates (
     message_date TIMESTAMPTZ NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved','ignored')),
     resolved_catalog_type TEXT,
-    resolved_item_id BIGINT REFERENCES itens_legends(id) ON DELETE SET NULL,
-    resolved_soul_id BIGINT REFERENCES almas_legends(id) ON DELETE SET NULL,
+    resolved_item_id BIGINT,
+    resolved_soul_id BIGINT,
     resolved_at TIMESTAMPTZ,
     UNIQUE (chat_id, message_id, candidate_index),
     FOREIGN KEY (chat_id, message_id)
