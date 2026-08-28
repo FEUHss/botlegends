@@ -91,15 +91,14 @@ def extrair_monstro_masmorra(texto):
     linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
     cabecalho = None
     indice = None
-    # O jogo usa dois cabeçalhos válidos: o legado
-    # "MASMORRA DA PLANÍCIE Sala: 1/4" e o atual, que pode trazer apenas
-    # o nome próprio, como "SANTUARIO DE ALTHERYN Sala: 4/4".
+    # Aceita o legado Sala: 1/4 e o formato Andar 1/3 do Oásis.
+    # O total recebido é preservado, sem inventar um quarto encontro.
     padrao = re.compile(
-        r"^(.+?)\s+sala:\s*(\d+)\s*/\s*(\d+)"
-        r"(?:\s+.*)?$",
+        r"^(.+?)(?:\s+[—–-]\s*|\s+)(?P<marcador>sala|andar)\s*:?\s*"
+        r"(?P<andar>\d+)\s*/\s*(?P<total>\d+)(?P<sufixo>\s+.*)?$",
         re.IGNORECASE,
     )
-    for posicao, linha in enumerate(linhas):
+    for posicao, linha in enumerate(linhas[:3]):
         limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
         match = padrao.search(limpa)
         if match:
@@ -109,8 +108,8 @@ def extrair_monstro_masmorra(texto):
 
     especial = False
     if cabecalho is None:
-        padrao_especial = re.compile(r"^(.+?)\s+[—-]\s*Boss(?:\s+.*)?$", re.IGNORECASE)
-        for posicao, linha in enumerate(linhas):
+        padrao_especial = re.compile(r"^(.+?)\s+[—–-]\s*Boss(?:\s+.*)?$", re.IGNORECASE)
+        for posicao, linha in enumerate(linhas[:3]):
             limpa = re.sub(r"^[^\wÀ-ÿ]+", "", linha).strip()
             match = padrao_especial.search(limpa)
             if match:
@@ -129,29 +128,38 @@ def extrair_monstro_masmorra(texto):
     hp_atual = None
     hp_maximo = None
     codigo_execucao = None
-    for linha in linhas[indice + 2:]:
-        if normalizar(linha).startswith("grupo"):
-            break
-        match_hp = re.search(
-            r"HP:\s*([\d.,]+)\s*/\s*([\d.,]+)", linha, re.IGNORECASE
-        )
-        if match_hp:
-            hp_atual = int(re.sub(r"\D", "", match_hp.group(1)))
-            hp_maximo = int(re.sub(r"\D", "", match_hp.group(2)))
-            match_id = re.search(r"\bID:\s*([A-Z0-9]+)", linha, re.IGNORECASE)
-            if match_id:
-                codigo_execucao = match_id.group(1).upper()
-            break
+    # HP somente na linha imediatamente após o nome: nunca usar o do player.
+    linha_hp = linhas[indice + 2] if indice + 2 < len(linhas) else ""
+    match_hp = re.fullmatch(
+        r"[^\w]*HP:\s*([\d.,]+)\s*/\s*([\d.,]+)"
+        r"(?:\s+ID:\s*([A-Z0-9]+))?", linha_hp, re.IGNORECASE,
+    )
+    if not match_hp:
+        return None
+    hp_atual = int(re.sub(r"\D", "", match_hp.group(1)))
+    hp_maximo = int(re.sub(r"\D", "", match_hp.group(2)))
+    if not 0 <= hp_atual <= hp_maximo or hp_maximo <= 0:
+        return None
+    if match_hp.group(3):
+        codigo_execucao = match_hp.group(3).upper()
 
     trecho_grupo = linhas[indice + 2:]
     tamanho_grupo = sum(
         1 for linha in trecho_grupo
-        if re.search(r"—\s*Nv\.\s*\d+", linha, re.IGNORECASE)
+        if re.search(r"\bNv\.?\s*\d+", linha, re.IGNORECASE)
     )
 
-    andar = 1 if especial else int(cabecalho.group(2))
-    total_andares = 1 if especial else int(cabecalho.group(3))
+    andar = 1 if especial else int(cabecalho.group("andar"))
+    total_andares = 1 if especial else int(cabecalho.group("total"))
+    if not 1 <= andar <= total_andares:
+        return None
+    boss = especial or bool(re.search(r"\bboss\b", cabecalho.group("sufixo") or "", re.I))
+    if not especial and cabecalho.group("marcador").lower() == "sala":
+        boss = boss or andar == total_andares
     nome_masmorra = cabecalho.group(1).strip()
+    # Confirmado pela guilda: os três encontros do Templo são bosses.
+    if normalizar(nome_masmorra) == "templo do oasis":
+        boss = True
     if normalizar(nome_masmorra).startswith("masmorra "):
         nome_masmorra = re.sub(
             r"^masmorra\s+", "Masmorra ", nome_masmorra,
@@ -161,7 +169,7 @@ def extrair_monstro_masmorra(texto):
         "masmorra": nome_masmorra,
         "andar": andar,
         "total_andares": total_andares,
-        "boss": especial or andar == total_andares,
+        "boss": boss,
         "nome": nome,
         "hp_atual": hp_atual,
         "hp_max": hp_maximo,
@@ -229,6 +237,18 @@ def extrair_masmorra_visual(texto):
     linhas = [linha.strip() for linha in (texto or "").splitlines() if linha.strip()]
     if not linhas:
         return None
+
+    # Entradas do Oásis: o sufixo descreve a modalidade/nível e não
+    # faz parte do nome. O cadastro real ainda será conferido no banco.
+    cabecalho = re.sub(r"^[^\wÀ-ÿ]+", "", linhas[0]).strip()
+    entrada = re.fullmatch(
+        r"(.+?)\s*\(\s*(?:Solo|Duo)\s*,\s*Lv\.?\s*\d+\s*\+\s*\)",
+        cabecalho, re.IGNORECASE,
+    )
+    if entrada and re.search(r"requer:.*chave de masmorra", normalizar(texto)):
+        nome = entrada.group(1).strip()
+        mapa = "Oásis Perdido" if normalizar(nome) in {"fenda solar", "templo do oasis"} else None
+        return {"nome": nome, "mapa": mapa, "codigo_sala": None}
 
     # Algumas masmorras exibem somente o nome e a pergunta de privacidade,
     # sem a linha "Mapa:". O nome imediatamente anterior à pergunta é o
