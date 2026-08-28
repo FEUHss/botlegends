@@ -4838,6 +4838,8 @@ async def mostrar_resumo_masmorra_atlas(alvo, mapa_id, masmorra_id):
                 )
 
         titulo_xp = "XP POR TAMANHO DA EQUIPE"
+        if (nome or "").casefold() in {"fenda solar", "templo do oásis", "templo do oasis"}:
+            titulo_xp = "XP ao concluir masmorra"
         if tipo_sistema == "fenda":
             titulo_xp = "XP por completar a Fenda"
             # A recompensa da fenda vem dos monstros vinculados a ela.
@@ -5000,7 +5002,7 @@ async def mostrar_monstro_atlas(
         cur.execute("""
             SELECT cm.ordem, cm.nome, mp.nome, cm.tipo, cm.raridade,
                    cm.hp, cm.atk, cm.defesa, cm.xp, cm.gold, cm.drops,
-                   d.tipo_sistema, cm.habilidade, cm.sem_habilidade
+                   d.tipo_sistema, cm.habilidade, cm.sem_habilidade, d.nome
             FROM catalogo_monstros cm
             JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
             LEFT JOIN catalogo_masmorras d ON d.id=cm.masmorra_id
@@ -5012,7 +5014,7 @@ async def mostrar_monstro_atlas(
             return
 
         (ordem, nome, mapa, tipo, raridade, hp, atk, defesa, xp, gold,
-         drops, sistema, habilidade, sem_habilidade) = monstro
+         drops, sistema, habilidade, sem_habilidade, nome_masmorra) = monstro
         cur.execute("""
             SELECT il.nome
             FROM item_drop_relacoes rel
@@ -5083,7 +5085,8 @@ async def mostrar_monstro_atlas(
                     valor = f"{valores[0]}–{valores[1]}"
                 rotulo = "Boss" if andar == 0 else f"{andar}º andar"
                 texto += f"• {rotulo}: {valor}\n"
-        if sistema == "fenda" or habilidade or sem_habilidade:
+        masmorra_oasis = (nome_masmorra or "").casefold() in {"fenda solar", "templo do oásis", "templo do oasis"}
+        if sistema == "fenda" or masmorra_oasis or habilidade or sem_habilidade:
             texto += f"✨ Habilidade: {'Sem habilidade' if sem_habilidade else (habilidade or 'a confirmar')}\n"
         if drops_relacionados:
             texto += "🎁 Drops: " + ", ".join(drops_relacionados[:6])
