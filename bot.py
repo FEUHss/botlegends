@@ -22,6 +22,7 @@ from loot_parser import (
 from market_collector import start_market_collector, stop_market_collector
 from photo_permissions import can_submit_photo
 from catalog_photos import save_header_photo, rift_entrance_name
+import library_extensions as lib_ext
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -3103,6 +3104,15 @@ async def detectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
+    if msg.photo and not (msg.caption or '').strip():
+        try:
+            if await lib_ext.receive_skin_photo(conn, msg, LOOT_REVIEWER_ID):
+                return
+        except Exception:
+            conn.rollback()
+            await msg.reply_text('Não foi possível iniciar a seleção de skin. Tente novamente.')
+            return
+
     texto = msg.text or msg.caption
 
     if not texto:
@@ -4105,6 +4115,10 @@ def teclado_inicio_unificado():
         [InlineKeyboardButton("🗝️ Criptas", callback_data="lib_criptas")],
         [InlineKeyboardButton("🎒 Itens", callback_data="lib_itens")],
         [InlineKeyboardButton("✨ Almas", callback_data="lib_almas")],
+        [InlineKeyboardButton("🎭 Skins", callback_data="ext_skins")],
+        [InlineKeyboardButton("🧭 Planejar run", callback_data="ext_runs")],
+        [InlineKeyboardButton("⭐ Favoritos", callback_data="ext_favorites"),
+         InlineKeyboardButton("🕘 Recentes", callback_data="ext_recent")],
         [InlineKeyboardButton("🔎 Buscar", callback_data="lib_buscar")],
     ])
 
@@ -4225,6 +4239,7 @@ async def mostrar_alma(query, alma_id):
         )],
         [InlineKeyboardButton("📚 Biblioteca", callback_data="lib_inicio")],
     ])
+    await editar_pagina_biblioteca(query, midia, texto, teclado)
 
 
 async def mostrar_inicio_criptas(alvo):
@@ -5139,6 +5154,7 @@ async def callback_atlas(update, context):
     await query.answer()
 
     dados = query.data
+    registrar_consulta_biblioteca(query)
     try:
         if dados == "atlas_inicio":
             await mostrar_inicio_atlas(query, editar=True)
@@ -5805,23 +5821,27 @@ async def mostrar_item(
     cur.execute("SELECT to_regclass('public.market_price_observations')")
     if cur.fetchone()[0]:
         cur.execute("""
-            SELECT upgrade, COUNT(*) AS anuncios,
+            SELECT o.upgrade, COUNT(*) AS anuncios,
                    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP
-                         (ORDER BY unit_price)::numeric, 2) AS mediana
-            FROM market_price_observations
-            WHERE catalog_type='item' AND item_id=%s
-              AND offer_side='sell' AND price_currency='TOFU'
-              AND message_date >= CURRENT_TIMESTAMP - INTERVAL '7 days'
-            GROUP BY upgrade
-            ORDER BY upgrade NULLS FIRST
+                         (ORDER BY o.unit_price)::numeric, 2) AS mediana,
+                   COUNT(DISTINCT to_jsonb(m)->>'seller_token') AS vendedores
+            FROM market_price_observations o
+            LEFT JOIN market_messages m ON m.chat_id=o.chat_id AND m.message_id=o.message_id
+            WHERE o.catalog_type='item' AND o.item_id=%s
+              AND o.offer_side='sell' AND o.price_currency='TOFU' AND o.unit_price>0
+              AND o.message_date BETWEEN CURRENT_TIMESTAMP - INTERVAL '7 days' AND CURRENT_TIMESTAMP
+            GROUP BY o.upgrade
+            ORDER BY o.upgrade NULLS FIRST
         """, (item_id,))
         tendencias = cur.fetchall()
         if tendencias:
             texto += "\n\n📈 Tendência de mercado — 7 dias\n"
-            for aprimoramento, anuncios, mediana in tendencias:
+            for aprimoramento, anuncios, mediana, vendedores in tendencias:
                 rotulo = "Base" if aprimoramento is None else f"+{aprimoramento}"
                 preco = f"{float(mediana):g}"
                 texto += f"• {rotulo}: {anuncios} anúncio(s) · mediana {preco} 🧀\n"
+                if anuncios < 5 or vendedores < 3:
+                    texto += '  ⚠️ Amostra pequena ou autores insuficientemente identificados.\n'
             texto += "⚠️ Referência de anúncios; não é preço oficial."
 
 
@@ -5895,13 +5915,65 @@ async def mostrar_item(
             query, "desconhecido", texto, teclado
         )
 
+def registrar_consulta_biblioteca(query):
+    if query.message.chat.type != 'private':
+        return
+    target = lib_ext.target_from_callback(query.data)
+    if target:
+        try:
+            lib_ext.remember(conn, query.from_user.id, target)
+        except Exception:
+            conn.rollback()
+
+
+async def abrir_destino_salvo(query, target):
+    kind, value = target.split(':')
+    value = int(value)
+    if kind == 'skin':
+        return await lib_ext.show_skin(conn, query, value, editar_pagina_biblioteca)
+    if kind == 'map':
+        return await mostrar_mapa_atlas(query, value, editar=True)
+    if kind == 'soul':
+        return await mostrar_alma(query, value)
+    if kind == 'crypt':
+        return await mostrar_cripta(query, value)
+    with conn.cursor() as cur:
+        if kind == 'item':
+            cur.execute('SELECT classe,categoria FROM itens_legends WHERE id=%s',(value,))
+            row=cur.fetchone()
+            if row: return await mostrar_item(query,value,*row)
+        elif kind == 'dungeon':
+            cur.execute('SELECT mapa_id FROM catalogo_masmorras WHERE id=%s',(value,))
+            row=cur.fetchone()
+            if row: return await mostrar_resumo_masmorra_atlas(query,row[0],value)
+        elif kind == 'monster':
+            cur.execute('SELECT mapa_id,masmorra_id,cripta_numero FROM catalogo_monstros WHERE id=%s',(value,))
+            row=cur.fetchone()
+            if row:
+                if row[2]: return await mostrar_monstro_cripta(query,value)
+                return await mostrar_monstro_atlas(query,value,row[0],f'r{row[1]}' if row[1] else 'c')
+
+
 async def callback_biblioteca(update, context):
 
     query = ConsultaItensComMidia(update.callback_query)
 
+    if query.from_user.id != LOOT_REVIEWER_ID and not membro_cadastrado(query.from_user.id):
+        await query.answer('Acesso restrito aos membros cadastrados.', show_alert=True)
+        return
+
     await query.answer()
 
     dados = query.data
+    registrar_consulta_biblioteca(query)
+    if dados.startswith('ext_'):
+        try:
+            await lib_ext.handle(conn, query, LOOT_REVIEWER_ID, editar_pagina_biblioteca, abrir_destino_salvo)
+        except Exception as erro:
+            conn.rollback()
+            print(f'Falha em extensão da Biblioteca: {type(erro).__name__}')
+            await query.message.reply_text('Não consegui abrir esta opção. Tente novamente pelo /lib.')
+        return
 
     if dados == "lib_inicio":
         context.user_data.pop("biblioteca_busca_msg_id", None)
@@ -6481,6 +6553,11 @@ async def cmd_crit(update, context):
 
 def main():
     print("1 - Entrou no main")
+    try:
+        lib_ext.initialize(conn)
+    except Exception:
+        conn.rollback()
+        print('Biblioteca: extensões indisponíveis; mantendo funcionalidades existentes.')
 
     app = (
         ApplicationBuilder()
@@ -6634,7 +6711,7 @@ def main():
 
     app.add_handler(
         MessageHandler(
-            filters.TEXT | filters.CaptionRegex(".*"),
+            filters.TEXT | filters.PHOTO | filters.CaptionRegex(".*"),
             detectar
         )
     )
