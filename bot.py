@@ -2471,6 +2471,15 @@ async def processar_imagem_monstro_masmorra(msg, dados):
 
         monstro_id, nome_catalogo, _ = monstro
         nome_recebido = dados["nome"].strip()
+        foto = msg.photo[-1]
+        cur.execute("SELECT monstro_id FROM monstro_imagens WHERE telegram_file_unique_id=%s", (foto.file_unique_id,))
+        imagem_existente = cur.fetchone()
+        if imagem_existente and imagem_existente[0] != monstro_id:
+            conn.rollback()
+            await msg.reply_text(
+                "⚠️ Esta imagem já está ligada a outro monstro. Revise o cadastro no painel."
+            )
+            return True
         cur.execute("""
             UPDATE catalogo_monstros
             SET masmorra_id=%s,
@@ -2564,8 +2573,8 @@ async def processar_imagem_monstro_masmorra(msg, dados):
         hp_por_andar = {andar: (minimo, maximo, total)
                         for andar, minimo, maximo, total in observacoes}
         linhas_hp = []
-        limite = dados["total_andares"] if dados["boss"] else 3
-        inicio = dados["total_andares"] if dados["boss"] else 1
+        limite = dados["andar"] if dados["boss"] else min(3, dados["total_andares"])
+        inicio = dados["andar"] if dados["boss"] else 1
         for andar in range(inicio, limite + 1):
             valores = hp_por_andar.get(andar)
             if not valores:
@@ -2574,7 +2583,7 @@ async def processar_imagem_monstro_masmorra(msg, dados):
                 valor = str(valores[0])
             else:
                 valor = f"{valores[0]}–{valores[1]}"
-            rotulo = "Boss" if andar == dados["total_andares"] else f"{andar}º andar"
+            rotulo = "Boss" if dados["boss"] else f"{andar}º andar"
             linhas_hp.append(f"• {rotulo}: {valor}")
 
         resposta = (
@@ -5024,11 +5033,12 @@ async def mostrar_monstro_atlas(
         observacoes_hp = []
         if (tipo or "").lower() == "masmorra" and sistema != "fenda":
             cur.execute("""
-                SELECT andar, MIN(hp_max), MAX(hp_max), COUNT(*)
+                SELECT CASE WHEN boss THEN 0 ELSE andar END AS etapa,
+                       MIN(hp_max), MAX(hp_max), COUNT(*)
                 FROM masmorra_monstro_observacoes
                 WHERE monstro_id=%s AND hp_max IS NOT NULL
-                GROUP BY andar
-                ORDER BY andar
+                GROUP BY CASE WHEN boss THEN 0 ELSE andar END
+                ORDER BY etapa
             """, (monstro_id,))
             observacoes_hp = cur.fetchall()
 
@@ -5038,6 +5048,10 @@ async def mostrar_monstro_atlas(
             else formatar_valor_catalogo(hp)
         )
 
+        if (raridade or "").lower() == "boss":
+            hp_boss = next((row for row in observacoes_hp if row[0] == 0), None)
+            if hp_boss:
+                hp_principal = str(hp_boss[1]) if hp_boss[1] == hp_boss[2] else f"{hp_boss[1]}–{hp_boss[2]}"
         eh_masmorra = (tipo or "").lower() in {"masmorra", "cripta"}
         texto = (
             f"👹 {nome}\n\n"
@@ -5057,7 +5071,7 @@ async def mostrar_monstro_atlas(
                 andar: (minimo, maximo)
                 for andar, minimo, maximo, _ in observacoes_hp
             }
-            andares = [4] if (raridade or "").lower() == "boss" else [1, 2, 3]
+            andares = [0] if (raridade or "").lower() == "boss" else sorted({1, 2, 3, *hp_por_andar})
             texto += "❤️ HP observado na masmorra:\n"
             for andar in andares:
                 valores = hp_por_andar.get(andar)
@@ -5067,7 +5081,7 @@ async def mostrar_monstro_atlas(
                     valor = str(valores[0])
                 else:
                     valor = f"{valores[0]}–{valores[1]}"
-                rotulo = "Boss" if andar == 4 else f"{andar}º andar"
+                rotulo = "Boss" if andar == 0 else f"{andar}º andar"
                 texto += f"• {rotulo}: {valor}\n"
         if sistema == "fenda" or habilidade or sem_habilidade:
             texto += f"✨ Habilidade: {'Sem habilidade' if sem_habilidade else (habilidade or 'a confirmar')}\n"
