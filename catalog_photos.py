@@ -1,6 +1,7 @@
 """Strict photo matching; never create or rename a catalog monster."""
 import re
 import unicodedata
+from library_extensions import observe_fixed_hp, audit
 
 
 def name_key(value):
@@ -60,9 +61,9 @@ async def save_header_photo(connection, msg, text):
             await msg.reply_text('⚠️ Esta imagem já está ligada a outro monstro. Revise o cadastro no painel.')
             return True
         fixed = kind == 'Caçada' or system == 'fenda'
+        review = False
         if fixed and hp is not None:
-            cur.execute("""UPDATE catalogo_monstros SET hp=%s,
-                atualizado_em=CURRENT_TIMESTAMP WHERE id=%s""", (hp, monster_id))
+            review = observe_fixed_hp(cur, monster_id, hp, msg.from_user.id)
         cur.execute("""INSERT INTO monstro_imagens
             (monstro_id, telegram_file_id, telegram_file_unique_id, nome_detectado, hp_detectado)
             VALUES (%s,%s,%s,%s,%s)
@@ -71,8 +72,11 @@ async def save_header_photo(connection, msg, text):
                 nome_detectado=EXCLUDED.nome_detectado, hp_detectado=EXCLUDED.hp_detectado,
                 atualizado_em=CURRENT_TIMESTAMP""",
             (monster_id, photo.file_id, photo.file_unique_id, name, hp))
+        audit(cur, 'monster', monster_id, msg.from_user.id, 'photo', {'hp_observed': hp, 'review': review})
         connection.commit()
     extra = f'❤️ HP máximo: {hp}' if fixed and hp is not None else (
         'ℹ️ HP não alterado: o andar não foi identificado.' if not fixed else 'ℹ️ HP não informado.')
+    if review:
+        extra = f'⚠️ HP observado: {hp}. Diferente do cadastro; enviado para revisão no painel, sem substituir o atual.'
     await msg.reply_text(f'✅ Imagem salva para {name}.\n🗺️ {map_name or "Mapa não informado"}\n{extra}')
     return True
