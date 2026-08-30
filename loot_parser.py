@@ -349,6 +349,23 @@ def extrair_monstro(texto):
     return None
 
 
+def extrair_secao_recompensas(texto):
+    """Isola somente os drops do monstro citado no cabeçalho ``vs``.
+
+    Mensagens de masmorra também contêm nomes de jogadores, habilidades e
+    eventos anteriores. Procurar produtos no texto inteiro pode atribuir um
+    drop ao monstro errado. A seção termina antes de Destaques/Status ou de
+    outro bloco estrutural do combate.
+    """
+    match = re.search(
+        r"Recompensas?\s*\(\s*vs\.?\s+[^\)]+\)\s*:\s*(.*?)(?="
+        r"\n\s*(?:🏅\s*)?Destaques\s*:|\n\s*Status\s*[—:-]|\Z)",
+        texto or "",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return match.group(1).strip() if match else None
+
+
 def extrair_forma_obtencao(texto):
     texto_normalizado = normalizar(texto)
 
@@ -379,12 +396,22 @@ def extrair_forma_obtencao(texto):
     return None
 
 
-def analisar_texto_loot(texto, itens, mapas):
+def analisar_texto_loot(texto, itens, mapas, almas=None):
     if not tem_marcador_recompensa(texto):
         return []
 
-    itens_encontrados = localizar_itens(texto, itens)
-    if not itens_encontrados:
+    # Em resultados de masmorra, somente o bloco de recompensas pertence ao
+    # monstro do cabeçalho. Nos formatos antigos, preservamos o texto todo.
+    secao_recompensas = extrair_secao_recompensas(texto)
+    texto_produtos = secao_recompensas if secao_recompensas is not None else texto
+    itens_encontrados = localizar_itens(texto_produtos, itens)
+    almas_encontradas = localizar_itens(texto_produtos, almas or [])
+    produtos = [
+        ("item", item_id, nome) for item_id, nome in itens_encontrados
+    ] + [
+        ("soul", alma_id, nome) for alma_id, nome in almas_encontradas
+    ]
+    if not produtos:
         return []
 
     texto_normalizado = normalizar(texto)
@@ -408,13 +435,17 @@ def analisar_texto_loot(texto, itens, mapas):
 
     return [
         {
-            "item_id": item_id,
-            "item_nome": item_nome,
+            "catalog_type": catalog_type,
+            "catalog_id": catalog_id,
+            # Campos legados mantidos para consumidores anteriores.
+            "item_id": catalog_id if catalog_type == "item" else None,
+            "soul_id": catalog_id if catalog_type == "soul" else None,
+            "item_nome": nome,
+            "catalog_name": nome,
             "monstro_nome": monstro,
             "mapa_id": mapa[0],
             "mapa_nome": mapa[1],
             "forma_obtencao": forma,
         }
-        for item_id, item_nome in itens_encontrados
+        for catalog_type, catalog_id, nome in produtos
     ]
-

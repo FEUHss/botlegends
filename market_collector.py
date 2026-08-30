@@ -30,14 +30,14 @@ class MarketObservation:
 
 PRICE_RE = re.compile(
     r"(?P<amount>\d+(?:[.,]\d{1,3})?)\s*"
-    r"(?P<scale>k|mil|m|milh(?:ao|ão|oes|ões)?)?\s*"
+    r"(?P<scale>kk|k|mil|m|milh(?:ao|ão|oes|ões)?)?\s*"
     r"(?P<currency>🧀|tf|tofu?s?|tufu?s?|gold|ouro|💵|💰|🪙)\s*"
     r"(?:cada)?",
     re.IGNORECASE,
 )
 BARE_PRICE_RE = re.compile(
     r"(?:^|[\s=»:\-]|\))(?P<amount>\d+(?:[.,]\d{1,3})?)\s*"
-    r"(?P<scale>k|mil|m)?\s*(?:cada|\(?\s*s[oó]\s+tofu\s*\)?)?\s*$",
+    r"(?P<scale>kk|k|mil|m)?\s*(?:cada|\(?\s*s[oó]\s+tofu\s*\)?)?\s*$",
     re.IGNORECASE,
 )
 PRICE_LADDER_RE = re.compile(
@@ -74,7 +74,7 @@ def _decimal_number(raw: str, scale: str | None) -> Decimal:
 
     if normalized_scale in {"k", "mil"}:
         value *= 1000
-    elif normalized_scale in {"m", "milhao", "milhoes"}:
+    elif normalized_scale in {"kk", "m", "milhao", "milhoes"}:
         value *= 1_000_000
     return value
 
@@ -109,6 +109,13 @@ def _clean_item_name(raw: str) -> tuple[str, int | None, Decimal]:
     units_match = re.search(r"\b(\d+)\s*(?:unidades?|un\b)", raw, re.I)
     if units_match:
         quantity = Decimal(units_match.group(1))
+    # Listas do Market frequentemente usam "11 poeiras por 1kk" sem x/un.
+    # Depois de remover o verbo de comércio, um inteiro no início da linha
+    # representa a quantidade do produto reconhecido pelo catálogo.
+    leading_quantity = re.match(r"^(?P<quantity>[1-9]\d*)\s+(?=[^\d])", raw)
+    if leading_quantity:
+        quantity = Decimal(leading_quantity.group("quantity"))
+        raw = raw[leading_quantity.end():]
     quantity = max(quantity, Decimal(1))
 
     raw = QUANTITY_RE.sub("", raw)
@@ -380,7 +387,7 @@ def resolve_catalog_name(
             "vendo", "venda", "vendinha", "compro", "comprando", "procuro",
             "troco", "troca", "negocio", "promo", "promocao", "item", "itens",
             "alma", "almas", "cada", "por", "lv", "atk", "def", "hp", "crit",
-            "tf", "tofu", "tofus", "gold", "ouro",
+            "tf", "tofu", "tofus", "gold", "ouro", "pago", "pagando",
         }
 
         def token_key(token: str) -> str:
@@ -556,8 +563,9 @@ def parse_catalog_market_message(
             # belong to the recognized catalog name/alias or trade markers.
             cleaned, _, _ = _clean_item_name(prefix)
             allowed=set(catalog[3].split()) | set(normalize_name(catalog[2]).split())
+            allowed |= {word + 's' for word in tuple(allowed) if len(word) > 3}
             noise={'vendo','venda','vendendo','compro','compras','compra','troco','pago','por','apenas','alma','skin','unidade','unidades','lanceiro','guerreiro','arqueiro','mago','varinha','cajado','berserker','tank','suporte','cacador'}
-            words=[w for w in normalize_name(cleaned).split() if not re.fullmatch(r'\d+(?:k|m|mil)?',w) and w not in noise]
+            words=[w for w in normalize_name(cleaned).split() if not re.fullmatch(r'\d+(?:kk|k|m|mil)?',w) and w not in noise]
             if any(w not in allowed for w in words):
                 pending_catalogs=[]
                 continue
@@ -618,6 +626,22 @@ def parse_catalog_market_message(
             pending_catalogs = []
 
     return results
+
+
+def _looks_like_offer(text: str, observations, matched) -> bool:
+    """Separates trade attempts from ordinary conversation in the topic."""
+    if observations or matched:
+        return True
+    normalized = normalize_name(text or "")
+    if _side_from_text(text or "") == "unknown":
+        return False
+    # A heading by itself ("vendo", "compro") is not an analyzable offer.
+    remaining = re.sub(
+        r"\b(vendo|vendendo|venda|vendas|compro|comprando|compra|compras|"
+        r"procuro|troco|troca|negocio)\b", " ", normalized,
+    )
+    remaining = re.sub(r"\s+", " ", remaining).strip()
+    return len(remaining) >= 3
 
 
 def _offer_dedupe_key(
@@ -701,7 +725,10 @@ def _persist_message(
             unmatched_count = len(unmatched_observations)
             detected_count = max(len(observations), len(matched) + unmatched_count)
             if not detected_count:
-                parse_status = "no_price"
+                parse_status = (
+                    "no_price" if _looks_like_offer(text, observations, matched)
+                    else "ignored"
+                )
             elif not matched:
                 parse_status = "unmatched_item"
             elif unmatched_count:
@@ -740,8 +767,9 @@ def _persist_message(
                     offer_kind,
                     parse_status,
                     len(matched),
-                    text[:4000],
-                    datetime.now(timezone.utc) + timedelta(days=7),
+                    text[:4000] if parse_status != "ignored" else None,
+                    (datetime.now(timezone.utc) + timedelta(days=7))
+                    if parse_status != "ignored" else None,
                     detected_count,
                     unmatched_count,
                 ),
