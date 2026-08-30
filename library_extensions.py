@@ -2,6 +2,7 @@
 import json
 import re
 import secrets
+import unicodedata
 from pathlib import Path
 from psycopg2.extras import Json
 from photo_permissions import can_submit_photo
@@ -17,9 +18,67 @@ def K(*args, **kwargs):
     return InlineKeyboardMarkup(*args, **kwargs)
 
 
+def _normalized_catalog_text(value):
+    value = unicodedata.normalize('NFKD', str(value or ''))
+    value = ''.join(char for char in value if not unicodedata.combining(char))
+    return re.sub(r'[^a-z0-9]+', ' ', value.lower()).strip()
+
+
+def _unique_catalog_match(value, rows):
+    """Resolve somente correspondências inequívocas do cadastro legado."""
+    wanted = _normalized_catalog_text(value)
+    if not wanted:
+        return None
+    exact = [row for row in rows if _normalized_catalog_text(row[1]) == wanted]
+    if len(exact) == 1:
+        return exact[0]
+    padded = f' {wanted} '
+    contained = [row for row in rows
+                 if len(_normalized_catalog_text(row[1])) >= 5
+                 and f' {_normalized_catalog_text(row[1])} ' in padded]
+    return contained[0] if len(contained) == 1 else None
+
+
 def initialize(connection):
     with connection.cursor() as cur:
         cur.execute(Path(__file__).with_name('library_schema.sql').read_text(encoding='utf-8'))
+        # Converte uma única vez os nomes já curados nos campos antigos em
+        # relações navegáveis. Depois da marca, qualquer remoção feita pelo
+        # painel permanece definitiva e não reaparece em reinicializações.
+        cur.execute("""INSERT INTO catalogo_estado(chave,inicializado)
+            VALUES('legacy_item_context_links_v1',FALSE)
+            ON CONFLICT(chave) DO NOTHING""")
+        cur.execute("""SELECT inicializado FROM catalogo_estado
+            WHERE chave='legacy_item_context_links_v1' FOR UPDATE""")
+        state = cur.fetchone()
+        if state and not state[0]:
+            cur.execute('SELECT id,nome FROM catalogo_mapas ORDER BY id')
+            maps = cur.fetchall()
+            cur.execute('SELECT id,nome,mapa_id FROM catalogo_monstros ORDER BY id')
+            monsters = cur.fetchall()
+            cur.execute('SELECT id,mapa,drop_1,drop_2,drop_3 FROM itens_legends ORDER BY id')
+            for item_id, map_text, *drop_texts in cur.fetchall():
+                map_match = _unique_catalog_match(map_text, maps)
+                if map_match:
+                    cur.execute("""INSERT INTO item_drop_relacoes
+                        (chave_unica,catalog_type,item_id,mapa_id,forma_obtencao,confirmado)
+                        VALUES(%s,'item',%s,%s,%s,TRUE)
+                        ON CONFLICT(chave_unica) DO NOTHING""",
+                        (f'item:{item_id}:mapa:{map_match[0]}', item_id,
+                         map_match[0], 'Mapa informado no cadastro do item'))
+                for drop_text in drop_texts:
+                    monster_match = _unique_catalog_match(drop_text, monsters)
+                    if monster_match:
+                        cur.execute("""INSERT INTO item_drop_relacoes
+                            (chave_unica,catalog_type,item_id,monstro_id,mapa_id,
+                             forma_obtencao,confirmado)
+                            VALUES(%s,'item',%s,%s,%s,%s,TRUE)
+                            ON CONFLICT(chave_unica) DO NOTHING""",
+                            (f'item:{item_id}:monstro:{monster_match[0]}', item_id,
+                             monster_match[0], monster_match[2],
+                             'Fonte informada no cadastro do item'))
+            cur.execute("""UPDATE catalogo_estado SET inicializado=TRUE,atualizado_em=now()
+                WHERE chave='legacy_item_context_links_v1'""")
     connection.commit()
 
 
@@ -100,7 +159,7 @@ def remember(connection, user, target):
             ON CONFLICT(telegram_id,target) DO UPDATE SET visited_at=now()''',(user,target))
         cur.execute('''DELETE FROM library_saved WHERE telegram_id=%s AND NOT favorite
             AND target NOT IN(SELECT target FROM library_saved WHERE telegram_id=%s
-            ORDER BY visited_at DESC LIMIT 20)''', (user,user))
+            ORDER BY visited_at DESC LIMIT 5)''', (user,user))
     connection.commit()
 
 
@@ -176,16 +235,19 @@ async def handle(connection, query, owner, render, open_target):
         await query.edit_message_text(f'✅ Foto vinculada a {skin[0]}.')
         return True
     if parts[0] in ('ext_recent','ext_favorites'):
+        limit = 50 if parts[0]=='ext_favorites' else 5
         with connection.cursor() as cur:
             cur.execute('''SELECT target,favorite FROM library_saved WHERE telegram_id=%s
-                AND (%s=FALSE OR favorite) ORDER BY visited_at DESC LIMIT 20''',(user,parts[0]=='ext_favorites'))
+                AND (%s=FALSE OR favorite) ORDER BY visited_at DESC LIMIT %s''',
+                (user,parts[0]=='ext_favorites',limit))
             rows = cur.fetchall()
         buttons=[]
         for target,favorite in rows:
             name=entry(connection,target)
             if name:
                 buttons.append([B(name[:46],callback_data=f'ext_open:{target}'),B('★' if favorite else '☆',callback_data=f'ext_fav:{target}')])
-        await render(query,'biblioteca','⭐ FAVORITOS E RECENTES\n\nToque no nome para abrir ou na estrela para favoritar.',K(buttons+[home]))
+        titulo = '⭐ FAVORITOS' if parts[0]=='ext_favorites' else '🕘 HISTÓRICO — ÚLTIMAS 5 CONSULTAS'
+        await render(query,'biblioteca',titulo+'\n\nToque no nome para abrir ou na estrela para favoritar.',K(buttons+[home]))
     elif parts[0]=='ext_fav':
         target=':'.join(parts[1:])
         if not entry(connection,target): return True
@@ -199,7 +261,7 @@ async def handle(connection, query, owner, render, open_target):
             cur.execute('''INSERT INTO library_saved(telegram_id,target,favorite) VALUES(%s,%s,TRUE)
                 ON CONFLICT(telegram_id,target) DO UPDATE SET favorite=NOT library_saved.favorite''',(user,target))
         connection.commit()
-        await query.message.reply_text('⭐ Favorito atualizado. Reabra Favoritos/Recentes para ver a lista.')
+        await query.message.reply_text('⭐ Favorito atualizado. Reabra Favoritos ou Histórico para ver a lista.')
     elif parts[0]=='ext_open':
         target=':'.join(parts[1:])
         if entry(connection,target):
@@ -238,14 +300,16 @@ async def show_skin(connection,query,skin_id,render):
             FROM catalogo_skins WHERE id=%s AND ativo''',(skin_id,))
         row=cur.fetchone()
         if not row: return
-        cur.execute('''SELECT d.nome,r.grupo,r.confirmado FROM skin_requisitos r
+        cur.execute('''SELECT d.id,d.nome,d.mapa_id,r.grupo,r.confirmado FROM skin_requisitos r
             JOIN catalogo_masmorras d ON d.id=r.masmorra_id WHERE r.skin_id=%s ORDER BY d.nome''',(skin_id,))
         requirements=cur.fetchall()
     name,cl,variant,origin,confirmed,photo=row
     text=f'🎭 {name}\n🏷️ {cl} · {variant or "Variante não informada"}\n\n📍 Obtenção: {origin or "a informar"}\n🔎 {"Confirmado" if confirmed else "Em revisão"}'
     if requirements:
-        text+='\n\n🔐 Usada na entrada (pode exigir outras skins da equipe):\n'+'\n'.join(f'• {d} — {"confirmado" if ok else "a confirmar"}' for d,_,ok in requirements)
-    await render(query,'biblioteca',text,K([[B('⬅ Skins',callback_data='ext_skins')],[B('📚 Biblioteca',callback_data='lib_inicio')]]),file_id=photo)
+        text+='\n\n🔐 Usada na entrada (pode exigir outras skins da equipe):\n'+'\n'.join(f'• {d} — {"confirmado" if ok else "a confirmar"}' for _,d,_,_,ok in requirements)
+    links=[[B(('🗝️ '+d)[:60],callback_data=f'ext_open:dungeon:{did}')]
+           for did,d,_,_,_ in requirements[:4]]
+    await render(query,'biblioteca',text,K(links+[[B('⬅ Skins',callback_data='ext_skins')],[B('📚 Biblioteca',callback_data='lib_inicio')]]),file_id=photo)
 
 
 async def show_plan(connection,query,dungeon_id,party,render):

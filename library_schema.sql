@@ -43,3 +43,42 @@ CREATE TABLE IF NOT EXISTS catalog_contributions (
  actor TEXT NOT NULL, action TEXT NOT NULL, details JSONB NOT NULL DEFAULT '{}',
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- One-time restoration of requirements explicitly confirmed by the guild.
+-- The state flag prevents a later manual removal in the dashboard from being
+-- silently recreated on every bot restart.
+INSERT INTO catalogo_estado(chave,inicializado)
+VALUES('skin_requisitos_confirmados_v2',FALSE)
+ON CONFLICT(chave) DO NOTHING;
+WITH seed_allowed AS (
+ SELECT 1 FROM catalogo_estado
+ WHERE chave='skin_requisitos_confirmados_v2' AND NOT inicializado
+), candidates AS (
+ SELECT d.id AS masmorra_id,s.id AS skin_id,
+   CASE
+    WHEN lower(d.nome)=lower('Covil da Hydra de Ossos')
+     AND lower(s.nome) LIKE lower('Cavaleiro das Sombras%') THEN 2
+    ELSE 1
+   END AS grupo
+ FROM catalogo_masmorras d CROSS JOIN catalogo_skins s,seed_allowed
+ WHERE
+  (lower(d.nome)=lower('Santuário de Altheryn')
+   AND lower(s.nome) LIKE lower('Culpa de Altheryn%'))
+  OR
+  (lower(d.nome)=lower('Covil da Hydra de Ossos')
+   AND (lower(s.nome) LIKE lower('Hydra Slayer%')
+        OR lower(s.nome) LIKE lower('Cavaleiro das Sombras%')))
+)
+INSERT INTO skin_requisitos(masmorra_id,skin_id,grupo,confirmado)
+SELECT masmorra_id,skin_id,grupo,TRUE FROM candidates
+ON CONFLICT(masmorra_id,skin_id) DO NOTHING;
+UPDATE catalogo_estado SET inicializado=TRUE,atualizado_em=now()
+WHERE chave='skin_requisitos_confirmados_v2' AND NOT inicializado
+  AND EXISTS (
+   SELECT 1 FROM catalogo_masmorras d CROSS JOIN catalogo_skins s
+   WHERE (lower(d.nome)=lower('Santuário de Altheryn')
+          AND lower(s.nome) LIKE lower('Culpa de Altheryn%'))
+      OR (lower(d.nome)=lower('Covil da Hydra de Ossos')
+          AND (lower(s.nome) LIKE lower('Hydra Slayer%')
+               OR lower(s.nome) LIKE lower('Cavaleiro das Sombras%')))
+  );

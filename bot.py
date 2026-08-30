@@ -364,7 +364,9 @@ def inicializar_banco():
             chat_id BIGINT NOT NULL,
             message_id BIGINT NOT NULL,
             remetente_id BIGINT,
-            item_id BIGINT NOT NULL,
+            catalog_type TEXT NOT NULL DEFAULT 'item',
+            item_id BIGINT,
+            soul_id BIGINT,
             item_nome_detectado TEXT NOT NULL,
             monstro_id BIGINT,
             monstro_nome_detectado TEXT,
@@ -381,7 +383,9 @@ def inicializar_banco():
         CREATE TABLE IF NOT EXISTS item_drop_relacoes (
             id BIGSERIAL PRIMARY KEY,
             chave_unica TEXT UNIQUE NOT NULL,
-            item_id BIGINT NOT NULL,
+            catalog_type TEXT NOT NULL DEFAULT 'item',
+            item_id BIGINT,
+            soul_id BIGINT,
             monstro_id BIGINT,
             mapa_id BIGINT,
             forma_obtencao TEXT,
@@ -636,6 +640,18 @@ def inicializar_banco():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_loot_evidencias_status
             ON loot_evidencias (status, criado_em DESC)
+        """)
+        # O mesmo fluxo de curadoria atende itens e almas. As alterações são
+        # aditivas e preservam integralmente as evidências antigas de itens.
+        cur.execute("ALTER TABLE loot_evidencias ADD COLUMN IF NOT EXISTS catalog_type TEXT NOT NULL DEFAULT 'item'")
+        cur.execute("ALTER TABLE loot_evidencias ADD COLUMN IF NOT EXISTS soul_id BIGINT")
+        cur.execute("ALTER TABLE loot_evidencias ALTER COLUMN item_id DROP NOT NULL")
+        cur.execute("ALTER TABLE item_drop_relacoes ADD COLUMN IF NOT EXISTS catalog_type TEXT NOT NULL DEFAULT 'item'")
+        cur.execute("ALTER TABLE item_drop_relacoes ADD COLUMN IF NOT EXISTS soul_id BIGINT")
+        cur.execute("ALTER TABLE item_drop_relacoes ALTER COLUMN item_id DROP NOT NULL")
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_item_drop_soul
+            ON item_drop_relacoes (soul_id)
         """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_item_drop_item
@@ -2175,9 +2191,9 @@ def mensagem_encaminhada_pelo_teletofus(msg):
     return bool(usuario_origem and usuario_origem.id == TELETOFUS_BOT_ID)
 
 
-def chave_relacao_drop(item_id, monstro_id, mapa_id, forma_obtencao):
+def chave_relacao_drop(catalog_type, catalog_id, monstro_id, mapa_id, forma_obtencao):
     return chave_origem_drop(
-        item_id,
+        f"{catalog_type}:{catalog_id}",
         monstro_id=monstro_id,
         mapa_id=mapa_id,
         forma=forma_obtencao,
@@ -2722,11 +2738,17 @@ async def processar_loot_para_revisao(msg, context):
     try:
         cur.execute("SELECT id, nome FROM itens_legends ORDER BY LENGTH(nome) DESC")
         itens = cur.fetchall()
+        cur.execute("SELECT id, nome FROM almas_legends ORDER BY LENGTH(nome) DESC")
+        almas = cur.fetchall()
         cur.execute("SELECT id, nome FROM catalogo_mapas ORDER BY ordem, id")
         mapas = cur.fetchall()
 
-        propostas = analisar_texto_loot(texto, itens, mapas)
+        propostas = analisar_texto_loot(texto, itens, mapas, almas)
         for proposta in propostas:
+            catalog_type = proposta.get("catalog_type", "item")
+            catalog_id = proposta["catalog_id"]
+            item_id = catalog_id if catalog_type == "item" else None
+            soul_id = catalog_id if catalog_type == "soul" else None
             monstro = resolver_monstro_catalogo(
                 cur,
                 proposta["monstro_nome"],
@@ -2750,7 +2772,8 @@ async def processar_loot_para_revisao(msg, context):
                     mapa_nome = row_mapa[0] if row_mapa else None
 
             relacao_chave = chave_relacao_drop(
-                proposta["item_id"],
+                catalog_type,
+                catalog_id,
                 monstro_id,
                 mapa_id,
                 proposta["forma_obtencao"],
@@ -2759,7 +2782,8 @@ async def processar_loot_para_revisao(msg, context):
             cur.execute("""
                 SELECT 1
                 FROM item_drop_relacoes
-                WHERE item_id=%s AND confirmado=TRUE
+                WHERE catalog_type=%s AND item_id IS NOT DISTINCT FROM %s
+                  AND soul_id IS NOT DISTINCT FROM %s AND confirmado=TRUE
                   AND (
                     (%s IS NOT NULL AND monstro_id=%s)
                     OR (%s IS NULL AND %s IS NOT NULL
@@ -2770,7 +2794,7 @@ async def processar_loot_para_revisao(msg, context):
                   )
                 LIMIT 1
             """, (
-                proposta["item_id"], monstro_id, monstro_id,
+                catalog_type, item_id, soul_id, monstro_id, monstro_id,
                 monstro_id, mapa_id, mapa_id,
                 monstro_id, mapa_id, proposta["forma_obtencao"] or "",
             ))
@@ -2780,7 +2804,8 @@ async def processar_loot_para_revisao(msg, context):
             cur.execute("""
                 SELECT 1
                 FROM loot_evidencias
-                WHERE item_id=%s
+                WHERE catalog_type=%s AND item_id IS NOT DISTINCT FROM %s
+                  AND soul_id IS NOT DISTINCT FROM %s
                   AND status IN ('pendente', 'aprovado', 'rejeitado')
                   AND (
                     (%s IS NOT NULL AND monstro_id=%s)
@@ -2792,7 +2817,7 @@ async def processar_loot_para_revisao(msg, context):
                   )
                 LIMIT 1
             """, (
-                proposta["item_id"], monstro_id, monstro_id,
+                catalog_type, item_id, soul_id, monstro_id, monstro_id,
                 monstro_id, mapa_id, mapa_id,
                 monstro_id, mapa_id, proposta["forma_obtencao"] or "",
             ))
@@ -2800,17 +2825,18 @@ async def processar_loot_para_revisao(msg, context):
                 continue
 
             evidencia_chave = (
-                f"{msg.chat.id}:{msg.message_id}:{proposta['item_id']}:"
+                f"{msg.chat.id}:{msg.message_id}:{catalog_type}:{catalog_id}:"
                 f"{monstro_id or 0}:{mapa_id or 0}:"
                 f"{normalizar(proposta['forma_obtencao'] or '')}"
             )
             cur.execute("""
                 INSERT INTO loot_evidencias
                     (chave_unica, relacao_chave, chat_id, message_id,
-                     remetente_id, item_id, item_nome_detectado, monstro_id,
+                     remetente_id, catalog_type, item_id, soul_id,
+                     item_nome_detectado, monstro_id,
                      monstro_nome_detectado, mapa_id, forma_obtencao,
                      texto_original)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (chave_unica) DO NOTHING
                 RETURNING id
             """, (
@@ -2819,7 +2845,9 @@ async def processar_loot_para_revisao(msg, context):
                 msg.chat.id,
                 msg.message_id,
                 msg.from_user.id if msg.from_user else None,
-                proposta["item_id"],
+                catalog_type,
+                item_id,
+                soul_id,
                 proposta["item_nome"],
                 monstro_id,
                 proposta["monstro_nome"],
@@ -2854,7 +2882,7 @@ async def processar_loot_para_revisao(msg, context):
             ]])
             texto_revisao = (
                 "🔎 PROPOSTA DE LINKAGEM\n\n"
-                f"🎁 Item: {proposta['item_nome']}\n"
+                f"{'✨ Alma' if catalog_type == 'soul' else '🎁 Item'}: {proposta['item_nome']}\n"
                 f"👹 Monstro: {monstro_texto}\n"
                 f"🗺️ Mapa: {mapa_nome or 'não identificado'}\n"
                 f"📍 Obtenção: {proposta['forma_obtencao'] or 'não identificada'}\n\n"
@@ -2902,8 +2930,8 @@ async def callback_revisao_loot(update, context):
     decisao_concluida = False
     try:
         cur.execute("""
-            SELECT relacao_chave, item_id, monstro_id, mapa_id,
-                   forma_obtencao, status
+            SELECT relacao_chave, catalog_type, item_id, soul_id,
+                   monstro_id, mapa_id, forma_obtencao, status
             FROM loot_evidencias
             WHERE id=%s
             FOR UPDATE
@@ -2915,7 +2943,8 @@ async def callback_revisao_loot(update, context):
             await query.edit_message_text("⚠️ Esta proposta não existe mais.")
             return
 
-        relacao_chave, item_id, monstro_id, mapa_id, forma, status = evidencia
+        (relacao_chave, catalog_type, item_id, soul_id, monstro_id,
+         mapa_id, forma, status) = evidencia
         if status != "pendente":
             conn.rollback()
             await query.edit_message_text(
@@ -2926,10 +2955,11 @@ async def callback_revisao_loot(update, context):
         if decisao == "sim":
             cur.execute("""
                 INSERT INTO item_drop_relacoes
-                    (chave_unica, item_id, monstro_id, mapa_id,
+                    (chave_unica, catalog_type, item_id, soul_id,
+                     monstro_id, mapa_id,
                      forma_obtencao, primeira_evidencia_id,
                      ultima_evidencia_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (chave_unica) DO UPDATE SET
                     ultima_evidencia_id=EXCLUDED.ultima_evidencia_id,
                     ultima_observacao=CURRENT_TIMESTAMP,
@@ -2938,7 +2968,9 @@ async def callback_revisao_loot(update, context):
                     confirmado=TRUE
             """, (
                 relacao_chave,
+                catalog_type,
                 item_id,
+                soul_id,
                 monstro_id,
                 mapa_id,
                 forma,
@@ -3001,44 +3033,44 @@ async def processar_busca_biblioteca(update, context):
 
     cur = conn.cursor()
     try:
-        padrao = f"%{termo}%"
+        procurado = normalizar(termo)
         cur.execute("""
             SELECT id, nome, classe, categoria
             FROM itens_legends
-            WHERE nome ILIKE %s
             ORDER BY nome
-            LIMIT 6
-        """, (padrao,))
-        itens = cur.fetchall()
+        """)
+        itens = [row for row in cur.fetchall() if procurado in normalizar(row[1])][:6]
 
         cur.execute("""
             SELECT cm.id, cm.nome, cm.mapa_id, mp.nome, cm.tipo,
                    cm.masmorra_id, cm.cripta_numero
             FROM catalogo_monstros cm
             JOIN catalogo_mapas mp ON mp.id=cm.mapa_id
-            WHERE cm.nome ILIKE %s
             ORDER BY cm.nome
-            LIMIT 6
-        """, (padrao,))
-        monstros = cur.fetchall()
+        """)
+        monstros = [row for row in cur.fetchall() if procurado in normalizar(row[1])][:6]
 
         cur.execute("""
             SELECT id, nome
             FROM catalogo_mapas
-            WHERE nome ILIKE %s
             ORDER BY ordem, id
-            LIMIT 4
-        """, (padrao,))
-        mapas = cur.fetchall()
+        """)
+        mapas = [row for row in cur.fetchall() if procurado in normalizar(row[1])][:4]
 
         cur.execute("""
             SELECT id, nome, especializacao
             FROM almas_legends
-            WHERE nome ILIKE %s
             ORDER BY nome
-            LIMIT 6
-        """, (padrao,))
-        almas = cur.fetchall()
+        """)
+        almas = [row for row in cur.fetchall() if procurado in normalizar(row[1])][:6]
+
+        cur.execute("""SELECT id,nome,mapa_id FROM catalogo_masmorras
+            WHERE COALESCE(tipo_sistema,'masmorra')<>'cripta' ORDER BY nome""")
+        masmorras = [row for row in cur.fetchall() if procurado in normalizar(row[1])][:5]
+        cur.execute("SELECT numero,nome FROM catalogo_criptas ORDER BY numero")
+        criptas = [row for row in cur.fetchall() if procurado in normalizar(row[1])][:3]
+        cur.execute("SELECT id,nome,classe FROM catalogo_skins WHERE ativo ORDER BY nome")
+        skins = [row for row in cur.fetchall() if procurado in normalizar(row[1])][:6]
     finally:
         cur.close()
 
@@ -3046,7 +3078,7 @@ async def processar_busca_biblioteca(update, context):
     for item_id, nome, classe, categoria in itens:
         linhas.append([InlineKeyboardButton(
             f"🎒 {nome}",
-            callback_data=f"item_{item_id}_{classe}_{categoria}",
+            callback_data=f"ext_open:item:{item_id}",
         )])
     for monstro_id, nome, mapa_id, mapa, tipo, masmorra_id, cripta_numero in monstros:
         if (tipo or "").lower() == "cripta" and cripta_numero:
@@ -3057,22 +3089,34 @@ async def processar_busca_biblioteca(update, context):
             destino = f"atlas_x_{monstro_id}_{mapa_id}_{area}"
             local = mapa
         linhas.append([InlineKeyboardButton(
-            f"👹 {nome} — {local}", callback_data=destino,
+            f"👹 {nome} — {local}", callback_data=f"ext_open:monster:{monstro_id}",
         )])
     for mapa_id, nome in mapas:
         linhas.append([InlineKeyboardButton(
-            f"🗺️ {nome}", callback_data=f"atlas_m_{mapa_id}"
+            f"🗺️ {nome}", callback_data=f"ext_open:map:{mapa_id}"
         )])
     for alma_id, nome, especializacao in almas:
         linhas.append([InlineKeyboardButton(
             f"✨ {nome} — {especializacao}",
-            callback_data=f"alma_{alma_id}",
+            callback_data=f"ext_open:soul:{alma_id}",
+        )])
+    for masmorra_id, nome, _mapa_id in masmorras:
+        linhas.append([InlineKeyboardButton(
+            f"🗝️ {nome}", callback_data=f"ext_open:dungeon:{masmorra_id}",
+        )])
+    for numero, nome in criptas:
+        linhas.append([InlineKeyboardButton(
+            f"🕯️ {nome}", callback_data=f"ext_open:crypt:{numero}",
+        )])
+    for skin_id, nome, classe in skins:
+        linhas.append([InlineKeyboardButton(
+            f"🎭 {nome} — {classe}", callback_data=f"ext_open:skin:{skin_id}",
         )])
     linhas.append([InlineKeyboardButton(
         "⬅ Biblioteca", callback_data="lib_inicio"
     )])
 
-    total = len(itens) + len(monstros) + len(mapas) + len(almas)
+    total = sum(map(len, (itens, monstros, mapas, almas, masmorras, criptas, skins)))
     texto = (
         f"🔎 BUSCA — {termo}\n\n"
         + (f"Encontrados: {total}" if total else "Nenhum resultado encontrado.")
@@ -4116,9 +4160,8 @@ def teclado_inicio_unificado():
         [InlineKeyboardButton("🎒 Itens", callback_data="lib_itens")],
         [InlineKeyboardButton("✨ Almas", callback_data="lib_almas")],
         [InlineKeyboardButton("🎭 Skins", callback_data="ext_skins")],
-        [InlineKeyboardButton("🧭 Planejar run", callback_data="ext_runs")],
         [InlineKeyboardButton("⭐ Favoritos", callback_data="ext_favorites"),
-         InlineKeyboardButton("🕘 Recentes", callback_data="ext_recent")],
+         InlineKeyboardButton("🕘 Histórico", callback_data="ext_recent")],
         [InlineKeyboardButton("🔎 Buscar", callback_data="lib_buscar")],
     ])
 
@@ -4212,6 +4255,17 @@ async def mostrar_alma(query, alma_id):
             FROM almas_legends WHERE id=%s
         """, (alma_id,))
         alma = cur.fetchone()
+        cur.execute("""
+            SELECT cm.id,cm.nome,COALESCE(rel.mapa_id,cm.mapa_id),mp.nome,
+                   rel.forma_obtencao
+            FROM item_drop_relacoes rel
+            LEFT JOIN catalogo_monstros cm ON cm.id=rel.monstro_id
+            LEFT JOIN catalogo_mapas mp ON mp.id=COALESCE(rel.mapa_id,cm.mapa_id)
+            WHERE rel.catalog_type='soul' AND rel.soul_id=%s
+              AND rel.confirmado=TRUE
+            ORDER BY mp.nome NULLS LAST,cm.nome NULLS LAST
+        """, (alma_id,))
+        origens = cur.fetchall()
     finally:
         cur.close()
     if not alma:
@@ -4233,7 +4287,26 @@ async def mostrar_alma(query, alma_id):
         f"📍 Obtenção: {obtencao or 'não informada'}\n\n"
         f"🔎 {estado}\n📚 Fonte: {fonte}"
     )
-    teclado = InlineKeyboardMarkup([
+    if origens:
+        texto += "\n\n🔗 Fontes confirmadas pela guilda\n"
+        for _, monstro, _, mapa, forma in origens[:6]:
+            partes = [parte for parte in (
+                f"👹 {monstro}" if monstro else None,
+                f"🗺️ {mapa}" if mapa else None,
+                f"📍 {forma}" if forma else None,
+            ) if parte]
+            texto += "• " + " — ".join(partes) + "\n"
+    botoes_origem = []
+    for monstro_id, monstro, mapa_id, mapa, _ in origens[:4]:
+        if monstro_id:
+            botoes_origem.append([InlineKeyboardButton(
+                f"👹 {monstro}"[:60], callback_data=f"ext_open:monster:{monstro_id}"
+            )])
+        elif mapa_id:
+            botoes_origem.append([InlineKeyboardButton(
+                f"🗺️ {mapa}"[:60], callback_data=f"ext_open:map:{mapa_id}"
+            )])
+    teclado = InlineKeyboardMarkup(botoes_origem + [
         [InlineKeyboardButton(
             "⬅ Voltar às almas", callback_data=f"almas_{slug}"
         )],
@@ -5031,13 +5104,15 @@ async def mostrar_monstro_atlas(
         (ordem, nome, mapa, tipo, raridade, hp, atk, defesa, xp, gold,
          drops, sistema, habilidade, sem_habilidade, nome_masmorra) = monstro
         cur.execute("""
-            SELECT il.nome
+            SELECT rel.catalog_type,rel.item_id,rel.soul_id,
+                   COALESCE(il.nome,al.nome)
             FROM item_drop_relacoes rel
-            JOIN itens_legends il ON il.id=rel.item_id
+            LEFT JOIN itens_legends il ON rel.catalog_type='item' AND il.id=rel.item_id
+            LEFT JOIN almas_legends al ON rel.catalog_type='soul' AND al.id=rel.soul_id
             WHERE rel.monstro_id=%s AND rel.confirmado=TRUE
-            ORDER BY il.nome
+            ORDER BY COALESCE(il.nome,al.nome)
         """, (monstro_id,))
-        drops_relacionados = [linha[0] for linha in cur.fetchall()]
+        drops_relacionados = cur.fetchall()
         cur.execute("""
             SELECT telegram_file_id, telegram_file_unique_id
             FROM monstro_imagens
@@ -5104,13 +5179,20 @@ async def mostrar_monstro_atlas(
         if sistema == "fenda" or masmorra_oasis or habilidade or sem_habilidade:
             texto += f"✨ Habilidade: {'Sem habilidade' if sem_habilidade else (habilidade or 'a confirmar')}\n"
         if drops_relacionados:
-            texto += "🎁 Drops: " + ", ".join(drops_relacionados[:6])
+            texto += "🎁 Drops: " + ", ".join(row[3] for row in drops_relacionados[:6])
             if len(drops_relacionados) > 6:
                 texto += f" e mais {len(drops_relacionados) - 6}"
         else:
             texto += f"🎁 Drops: {drops or 'a confirmar'}"
 
-        teclado = InlineKeyboardMarkup([
+        botoes_drops = []
+        for catalog_type,item_id,soul_id,drop_nome in drops_relacionados[:4]:
+            destino = f"item:{item_id}" if catalog_type == 'item' else f"soul:{soul_id}"
+            botoes_drops.append([InlineKeyboardButton(
+                f"{'🎒' if catalog_type == 'item' else '✨'} {drop_nome}"[:60],
+                callback_data=f"ext_open:{destino}",
+            )])
+        teclado = InlineKeyboardMarkup(botoes_drops + [
             [InlineKeyboardButton(
                 "⬅️ Voltar aos monstros",
                 callback_data=f"atlas_t_{mapa_id}_{codigo_area}"
@@ -5846,21 +5928,21 @@ async def mostrar_item(
 
 
     cur.execute("""
-        SELECT cm.nome,
+        SELECT cm.id,cm.nome,COALESCE(rel.mapa_id,mp_monstro.id),
                COALESCE(mp.nome, mp_monstro.nome) AS mapa,
                rel.forma_obtencao
         FROM item_drop_relacoes rel
         LEFT JOIN catalogo_monstros cm ON cm.id=rel.monstro_id
         LEFT JOIN catalogo_mapas mp ON mp.id=rel.mapa_id
         LEFT JOIN catalogo_mapas mp_monstro ON mp_monstro.id=cm.mapa_id
-        WHERE rel.item_id=%s AND rel.confirmado=TRUE
+        WHERE rel.catalog_type='item' AND rel.item_id=%s AND rel.confirmado=TRUE
         ORDER BY mapa NULLS LAST, cm.nome NULLS LAST, rel.forma_obtencao
     """, (item_id,))
     fontes_confirmadas = cur.fetchall()
 
     if fontes_confirmadas:
         texto += "\n\n🔗 Fontes confirmadas pela guilda\n"
-        for monstro, mapa, forma in fontes_confirmadas[:6]:
+        for _, monstro, _, mapa, forma in fontes_confirmadas[:6]:
             partes = []
             if monstro:
                 partes.append(f"👹 {monstro}")
@@ -5879,7 +5961,17 @@ async def mostrar_item(
             f"{item['passiva']}"
         )
 
-    teclado = InlineKeyboardMarkup([
+    botoes_fontes = []
+    for monstro_id,monstro,mapa_id,mapa,_ in fontes_confirmadas[:4]:
+        if monstro_id:
+            botoes_fontes.append([InlineKeyboardButton(
+                f"👹 {monstro}"[:60], callback_data=f"ext_open:monster:{monstro_id}"
+            )])
+        elif mapa_id:
+            botoes_fontes.append([InlineKeyboardButton(
+                f"🗺️ {mapa}"[:60], callback_data=f"ext_open:map:{mapa_id}"
+            )])
+    teclado = InlineKeyboardMarkup(botoes_fontes + [
 
         [
             InlineKeyboardButton(
@@ -6081,7 +6173,8 @@ async def callback_biblioteca(update, context):
             query,
             "biblioteca",
             "🔎 BUSCAR NA BIBLIOTECA\n\n"
-            "Envie o nome de um item, alma, mapa ou monstro.",
+            "Envie parte do nome de um item, alma, monstro, mapa, "
+            "masmorra, Cripta ou skin.",
             InlineKeyboardMarkup([[
                 InlineKeyboardButton(
                     "⬅ Biblioteca", callback_data="lib_inicio"
